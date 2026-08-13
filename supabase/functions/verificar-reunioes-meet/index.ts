@@ -34,7 +34,11 @@ Deno.serve(async (req: Request) => {
   }
 
   const authHeader = req.headers.get('Authorization') ?? '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  // TEMP DEBUG — remover depois de descobrir por que a comparação está falhando.
+  console.log('DEBUG authHeader length:', authHeader.length);
+  console.log('DEBUG serviceRoleKey length:', serviceRoleKey.length);
+  console.log('DEBUG serviceRoleKey presente:', Boolean(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')));
   if (authHeader !== `Bearer ${serviceRoleKey}`) {
     return jsonResponse({ error: 'Não autorizado.' }, 401);
   }
