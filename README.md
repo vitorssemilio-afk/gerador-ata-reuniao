@@ -148,9 +148,13 @@ não precisa lembrar dele, só existe pra isso)
 
 ### 4. Deploy das funções
 
+`verificar-reunioes-meet` é chamada pelo cron com um segredo próprio (`CRON_SECRET`, configurado no
+próximo passo), não com um JWT do Supabase — por isso o deploy dela precisa da flag
+`--no-verify-jwt`, senão o próprio Supabase bloqueia a chamada antes de chegar no código da função.
+
 ```bash
 supabase functions deploy google-meet-conectar
-supabase functions deploy verificar-reunioes-meet
+supabase functions deploy verificar-reunioes-meet --no-verify-jwt
 ```
 
 ### 5. Agendar a verificação periódica
@@ -184,7 +188,11 @@ select cron.schedule(
       'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'),
       'Content-Type', 'application/json'
     ),
-    body := '{}'::jsonb
+    body := '{}'::jsonb,
+    -- a função consulta a API do Meet várias vezes em sequência (uma
+    -- reunião por vez) — o timeout padrão do pg_net (5s) estoura fácil
+    -- com mais de uma conexão/reunião pra verificar.
+    timeout_milliseconds := 30000
   );
   $$
 );

@@ -83,19 +83,10 @@ async function verificarConexao(supabase: any, conexao: ConexaoParaVerificar): P
   const conferencias = await listarConferenciasRecentes(tokens.access_token, desde);
   let encontradas = 0;
 
-  // TEMP DEBUG — remover depois de confirmar o formato da resposta da API do Meet.
-  console.log(`DEBUG desde: ${desde.toISOString()}`);
-  console.log(`DEBUG conferencias encontradas: ${conferencias.length}`);
-  console.log('DEBUG conferencias:', JSON.stringify(conferencias));
-
   for (const conferencia of conferencias) {
-    if (!conferencia.endTime) {
-      console.log(`DEBUG ${conferencia.name}: sem endTime, pulando`);
-      continue; // reunião ainda em andamento
-    }
+    if (!conferencia.endTime) continue; // reunião ainda em andamento
 
     const transcricao = await obterTranscricaoDaReuniao(tokens.access_token, conferencia.name);
-    console.log(`DEBUG ${conferencia.name}: transcricao ${transcricao ? `encontrada (${transcricao.length} chars)` : 'não encontrada'}`);
     if (!transcricao) continue; // sem transcrição pronta ainda (ou reunião sem transcrição habilitada)
 
     const { error: insertError } = await supabase
