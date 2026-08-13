@@ -539,6 +539,81 @@ a {
   border-bottom: none;
 }
 
+/* ── Pré-visualização do documento (.docx) ── */
+.doc-preview {
+  background: #ffffff;
+  color: #1a1a1a;
+  border-radius: var(--radius-sm);
+  padding: 32px 36px;
+  font-size: 13px;
+  line-height: 1.5;
+  max-height: 520px;
+  overflow-y: auto;
+}
+
+.doc-preview-title {
+  font-family: 'Inter', sans-serif;
+  font-weight: 700;
+  font-size: 20px;
+  color: #1a1a1a;
+  margin-bottom: 18px;
+}
+
+.doc-preview-heading {
+  font-size: 15px;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 20px 0 8px;
+}
+
+.doc-preview-subheading {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #1a1a1a;
+  margin: 14px 0 4px;
+}
+
+.doc-preview p,
+.doc-preview li {
+  color: #2a2a2a;
+}
+
+.doc-preview ul {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.doc-preview-header,
+.doc-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 8px;
+}
+
+.doc-preview-header th,
+.doc-preview-header td,
+.doc-preview-table th,
+.doc-preview-table td {
+  border: 1px solid #d0d0d5;
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.doc-preview-header th {
+  width: 25%;
+  background: #f2f2f4;
+  font-weight: 700;
+}
+
+.doc-preview-table th {
+  background: #f2f2f4;
+  font-weight: 700;
+}
+
 /* ── Status badge ── */
 .status-badge {
   display: inline-flex;

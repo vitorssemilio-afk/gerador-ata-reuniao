@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { AtaPreviewDocumento } from '../components/AtaPreviewDocumento';
 import { AtaStatusBadge } from '../components/AtaStatusBadge';
 import { baixarAtaDocx, gerarAtaDocxBlob, nomeArquivoAtaDocx } from '../lib/exportAtaDocx';
 import { copiarParaAreaDeTransferencia, gerarTextoWhatsapp } from '../lib/exportAtaWhatsapp';
@@ -284,7 +285,8 @@ export function AtaDetalhe() {
               <div key={i} className="form-grid">
                 <label className="field field-full">
                   <span>Decisão {i + 1}</span>
-                  <input
+                  <textarea
+                    rows={2}
                     value={decisao}
                     onChange={(e) => atualizarCampo('decisoes', atualizarItem(ata.decisoes, i, e.target.value))}
                   />
@@ -313,7 +315,11 @@ export function AtaDetalhe() {
               <div key={i} className="form-grid">
                 <label className="field field-full">
                   <span>Ação</span>
-                  <input value={acao.descricao} onChange={(e) => atualizarAcao(i, 'descricao', e.target.value)} />
+                  <textarea
+                    rows={2}
+                    value={acao.descricao}
+                    onChange={(e) => atualizarAcao(i, 'descricao', e.target.value)}
+                  />
                 </label>
                 <label className="field">
                   <span>Responsável</span>
@@ -349,7 +355,8 @@ export function AtaDetalhe() {
               <div key={i} className="form-grid">
                 <label className="field field-full">
                   <span>Pendência {i + 1}</span>
-                  <input
+                  <textarea
+                    rows={2}
                     value={pendencia}
                     onChange={(e) => atualizarCampo('pendencias', atualizarItem(ata.pendencias, i, e.target.value))}
                   />
@@ -393,6 +400,15 @@ export function AtaDetalhe() {
                 {copiado ? 'Copiado!' : 'Copiar para WhatsApp'}
               </button>
             </div>
+          </div>
+
+          <div className="card form-card">
+            <h2>Pré-visualização do documento (Word/Drive)</h2>
+            <p className="field-hint">
+              É assim que a ata sai no arquivo baixado ou salvo no Drive — atualiza sozinha
+              conforme você edita os campos acima.
+            </p>
+            <AtaPreviewDocumento ata={ata} />
           </div>
 
           <div className="card form-card">
