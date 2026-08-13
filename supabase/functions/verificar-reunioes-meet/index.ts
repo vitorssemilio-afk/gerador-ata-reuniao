@@ -33,17 +33,17 @@ Deno.serve(async (req: Request) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // Segredo próprio (não é a service role key do projeto — formato dela
+  // mudou entre versões do Supabase e comparar direto ficou frágil).
+  // Configurado via `supabase secrets set CRON_SECRET=...` e no Vault
+  // com o mesmo valor, usado só pelo cron pra chamar essa função.
   const authHeader = req.headers.get('Authorization') ?? '';
-  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  // TEMP DEBUG — remover depois de descobrir por que a comparação está falhando.
-  console.log('DEBUG authHeader length:', authHeader.length);
-  console.log('DEBUG serviceRoleKey length:', serviceRoleKey.length);
-  console.log('DEBUG serviceRoleKey presente:', Boolean(Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')));
-  if (authHeader !== `Bearer ${serviceRoleKey}`) {
+  const cronSecret = Deno.env.get('CRON_SECRET');
+  if (!cronSecret || authHeader !== `Bearer ${cronSecret}`) {
     return jsonResponse({ error: 'Não autorizado.' }, 401);
   }
 
-  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, serviceRoleKey);
+  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
   const { data: conexoes, error: conexoesError } = await supabase.rpc(
     'listar_conexoes_google_meet_para_verificacao',

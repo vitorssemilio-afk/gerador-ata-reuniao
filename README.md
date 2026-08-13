@@ -155,12 +155,24 @@ supabase functions deploy verificar-reunioes-meet
 
 ### 5. Agendar a verificação periódica
 
-`verificar-reunioes-meet` não é chamada pelo front — precisa de um cron chamando ela por fora. Com
-as extensões `pg_cron` e `pg_net` ativas (**Database → Extensions**), cria outro secret no Vault com
-a **service_role key** do projeto (Project Settings → API) e agenda o job pelo SQL Editor:
+`verificar-reunioes-meet` não é chamada pelo front — precisa de um cron chamando ela por fora,
+autenticado com um segredo próprio (`CRON_SECRET`) que só o cron e a função conhecem. Não usa a
+`service_role key` do painel pra isso — o formato dela varia entre versões/projetos do Supabase, o
+que tornaria a comparação frágil.
+
+Gera um valor aleatório forte (ex: `openssl rand -hex 32`, ou no PowerShell:
+`-join ((48..57) + (97..102) | Get-Random -Count 64 | ForEach-Object {[char]$_})`) e usa o **mesmo
+valor** nos dois lados:
+
+```bash
+supabase secrets set CRON_SECRET=cole-aqui-o-valor-gerado
+```
+
+Com as extensões `pg_cron` e `pg_net` ativas (**Database → Extensions**), guarda o mesmo valor no
+Vault e agenda o job pelo SQL Editor:
 
 ```sql
-select vault.create_secret('sua-service-role-key-aqui', 'service_role_key');
+select vault.create_secret('cole-aqui-o-mesmo-valor-gerado', 'cron_secret');
 
 select cron.schedule(
   'verificar-reunioes-meet',
@@ -169,7 +181,7 @@ select cron.schedule(
   select net.http_post(
     url := 'https://SEU_PROJECT_REF.supabase.co/functions/v1/verificar-reunioes-meet',
     headers := jsonb_build_object(
-      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key'),
+      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'cron_secret'),
       'Content-Type', 'application/json'
     ),
     body := '{}'::jsonb
