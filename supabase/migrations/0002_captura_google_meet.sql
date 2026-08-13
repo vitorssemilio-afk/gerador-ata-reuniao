@@ -57,7 +57,10 @@ create or replace function public.salvar_conexao_google_meet(
 returns uuid
 language plpgsql
 security definer
-set search_path = public
+-- pgcrypto (pgp_sym_encrypt) fica no schema "extensions" no Supabase,
+-- não em "public" — precisa estar no search_path, senão a função não
+-- é encontrada dentro de um SECURITY DEFINER com search_path fixo.
+set search_path = public, extensions
 as $$
 declare
   v_chave text;
@@ -95,7 +98,7 @@ returns table (
 )
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   v_chave text;
