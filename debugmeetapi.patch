@@ -1,0 +1,52 @@
+From f81ed447e86483a6c316ecb80d3c66f993a0c58b Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 13 Aug 2026 17:37:31 +0000
+Subject: [PATCH] debug temporario: log de conferencias e transcripts
+ encontrados
+
+---
+ supabase/functions/verificar-reunioes-meet/index.ts   | 11 ++++++++++-
+ supabase/functions/verificar-reunioes-meet/meetApi.ts |  2 ++
+ 2 files changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/supabase/functions/verificar-reunioes-meet/index.ts b/supabase/functions/verificar-reunioes-meet/index.ts
+index 277a49a..f51e1c9 100644
+--- a/supabase/functions/verificar-reunioes-meet/index.ts
++++ b/supabase/functions/verificar-reunioes-meet/index.ts
+@@ -83,10 +83,19 @@ async function verificarConexao(supabase: any, conexao: ConexaoParaVerificar): P
+   const conferencias = await listarConferenciasRecentes(tokens.access_token, desde);
+   let encontradas = 0;
+ 
++  // TEMP DEBUG — remover depois de confirmar o formato da resposta da API do Meet.
++  console.log(`DEBUG desde: ${desde.toISOString()}`);
++  console.log(`DEBUG conferencias encontradas: ${conferencias.length}`);
++  console.log('DEBUG conferencias:', JSON.stringify(conferencias));
++
+   for (const conferencia of conferencias) {
+-    if (!conferencia.endTime) continue; // reunião ainda em andamento
++    if (!conferencia.endTime) {
++      console.log(`DEBUG ${conferencia.name}: sem endTime, pulando`);
++      continue; // reunião ainda em andamento
++    }
+ 
+     const transcricao = await obterTranscricaoDaReuniao(tokens.access_token, conferencia.name);
++    console.log(`DEBUG ${conferencia.name}: transcricao ${transcricao ? `encontrada (${transcricao.length} chars)` : 'não encontrada'}`);
+     if (!transcricao) continue; // sem transcrição pronta ainda (ou reunião sem transcrição habilitada)
+ 
+     const { error: insertError } = await supabase
+diff --git a/supabase/functions/verificar-reunioes-meet/meetApi.ts b/supabase/functions/verificar-reunioes-meet/meetApi.ts
+index 759fbfb..b7d5b3a 100644
+--- a/supabase/functions/verificar-reunioes-meet/meetApi.ts
++++ b/supabase/functions/verificar-reunioes-meet/meetApi.ts
+@@ -103,6 +103,8 @@ async function buscarTranscricaoFinalizada(
+   conferenceRecordName: string,
+ ): Promise<Transcript | null> {
+   const dados: { transcripts?: Transcript[] } = await chamarMeetApi(accessToken, `${conferenceRecordName}/transcripts`);
++  // TEMP DEBUG — remover depois de confirmar o formato da resposta da API do Meet.
++  console.log(`DEBUG transcripts de ${conferenceRecordName}:`, JSON.stringify(dados.transcripts ?? []));
+   return (dados.transcripts ?? []).find((t) => t.state === 'ENDED' || t.state === 'FILE_GENERATED') ?? null;
+ }
+ 
+-- 
+2.43.0
+

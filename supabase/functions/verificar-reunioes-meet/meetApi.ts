@@ -103,6 +103,8 @@ async function buscarTranscricaoFinalizada(
   conferenceRecordName: string,
 ): Promise<Transcript | null> {
   const dados: { transcripts?: Transcript[] } = await chamarMeetApi(accessToken, `${conferenceRecordName}/transcripts`);
+  // TEMP DEBUG — remover depois de confirmar o formato da resposta da API do Meet.
+  console.log(`DEBUG transcripts de ${conferenceRecordName}:`, JSON.stringify(dados.transcripts ?? []));
   return (dados.transcripts ?? []).find((t) => t.state === 'ENDED' || t.state === 'FILE_GENERATED') ?? null;
 }
 
