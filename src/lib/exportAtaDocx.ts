@@ -19,6 +19,13 @@ export function nomeArquivoAtaDocx(ata: Pick<AtaReuniao, 'cliente' | 'data_reuni
   return `Ata_${slug(ata.cliente) || 'cliente'}_${formatarData(ata.data_reuniao).replace(/\//g, '-')}.docx`;
 }
 
+// Largura útil da página (Letter, margens de 1" = 1440 twips de cada
+// lado): 12240 - 1440*2 = 9360 twips. Largura de coluna em porcentagem
+// não é respeitada de forma confiável pelo conversor do Google Docs — as
+// tabelas viravam colunas praticamente sem largura, com o texto
+// quebrando letra por letra. Usar twips fixos + layout FIXED resolve.
+const LARGURA_UTIL_TWIPS = 9360;
+
 export async function gerarAtaDocxBlob(ata: AtaReuniao): Promise<Blob> {
   const {
     Document,
@@ -31,6 +38,7 @@ export async function gerarAtaDocxBlob(ata: AtaReuniao): Promise<Blob> {
     TextRun,
     WidthType,
     AlignmentType,
+    TableLayoutType,
   } = await import('docx');
 
   const horario =
@@ -38,19 +46,23 @@ export async function gerarAtaDocxBlob(ata: AtaReuniao): Promise<Blob> {
       ? `${ata.hora_inicio}–${ata.hora_fim}`
       : ata.hora_inicio || '';
 
+  const colunasCabecalho = [Math.round(LARGURA_UTIL_TWIPS * 0.25), Math.round(LARGURA_UTIL_TWIPS * 0.75)];
+
   const celulaCabecalho = (texto: string) =>
     new TableCell({
-      width: { size: 25, type: WidthType.PERCENTAGE },
+      width: { size: colunasCabecalho[0], type: WidthType.DXA },
       children: [new Paragraph({ children: [new TextRun({ text: texto, bold: true })] })],
     });
   const celulaValor = (texto: string) =>
     new TableCell({
-      width: { size: 75, type: WidthType.PERCENTAGE },
+      width: { size: colunasCabecalho[1], type: WidthType.DXA },
       children: [new Paragraph(texto)],
     });
 
   const tabelaCabecalho = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: LARGURA_UTIL_TWIPS, type: WidthType.DXA },
+    columnWidths: colunasCabecalho,
+    layout: TableLayoutType.FIXED,
     rows: [
       new TableRow({ children: [celulaCabecalho('Cliente/Projeto'), celulaValor(ata.cliente)] }),
       new TableRow({ children: [celulaCabecalho('Data'), celulaValor(`${formatarData(ata.data_reuniao)}${horario ? ` (${horario})` : ''}`)] }),
@@ -73,41 +85,42 @@ export async function gerarAtaDocxBlob(ata: AtaReuniao): Promise<Blob> {
       ? ata.decisoes.map((d) => new Paragraph({ text: d, bullet: { level: 0 } }))
       : [new Paragraph('Nenhuma decisão registrada.')];
 
+  const colunasAcoes = [
+    Math.round(LARGURA_UTIL_TWIPS * 0.5),
+    Math.round(LARGURA_UTIL_TWIPS * 0.25),
+    Math.round(LARGURA_UTIL_TWIPS * 0.25),
+  ];
+
   const linhaHeaderAcoes = new TableRow({
     tableHeader: true,
     children: ['Ação', 'Responsável', 'Prazo'].map(
-      (texto) =>
+      (texto, i) =>
         new TableCell({
+          width: { size: colunasAcoes[i], type: WidthType.DXA },
           shading: { fill: 'EFEFEF' },
           children: [new Paragraph({ children: [new TextRun({ text: texto, bold: true })] })],
         }),
     ),
   });
 
+  const linhaAcoes = (descricao: string, responsavel: string, prazo: string) =>
+    new TableRow({
+      children: [
+        new TableCell({ width: { size: colunasAcoes[0], type: WidthType.DXA }, children: [new Paragraph(descricao)] }),
+        new TableCell({ width: { size: colunasAcoes[1], type: WidthType.DXA }, children: [new Paragraph(responsavel)] }),
+        new TableCell({ width: { size: colunasAcoes[2], type: WidthType.DXA }, children: [new Paragraph(prazo)] }),
+      ],
+    });
+
   const linhasAcoes =
     ata.acoes.length > 0
-      ? ata.acoes.map(
-          (acao) =>
-            new TableRow({
-              children: [
-                new TableCell({ children: [new Paragraph(acao.descricao)] }),
-                new TableCell({ children: [new Paragraph(acao.responsavel ?? '—')] }),
-                new TableCell({ children: [new Paragraph(acao.prazo ?? '—')] }),
-              ],
-            }),
-        )
-      : [
-          new TableRow({
-            children: [
-              new TableCell({ children: [new Paragraph('Nenhuma ação combinada.')] }),
-              new TableCell({ children: [new Paragraph('—')] }),
-              new TableCell({ children: [new Paragraph('—')] }),
-            ],
-          }),
-        ];
+      ? ata.acoes.map((acao) => linhaAcoes(acao.descricao, acao.responsavel ?? '—', acao.prazo ?? '—'))
+      : [linhaAcoes('Nenhuma ação combinada.', '—', '—')];
 
   const tabelaAcoes = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: LARGURA_UTIL_TWIPS, type: WidthType.DXA },
+    columnWidths: colunasAcoes,
+    layout: TableLayoutType.FIXED,
     rows: [linhaHeaderAcoes, ...linhasAcoes],
   });
 
