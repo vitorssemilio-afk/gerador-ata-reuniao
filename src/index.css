@@ -169,6 +169,33 @@ a {
   flex-shrink: 0;
 }
 
+.topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 28px;
+}
+
+.topbar-nav-link {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.topbar-nav-link:hover {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.topbar-nav-link.active {
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
 .topbar-user {
   display: flex;
   align-items: center;

@@ -2,6 +2,10 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
 
+function navLinkClass({ isActive }: { isActive: boolean }): string {
+  return `topbar-nav-link${isActive ? ' active' : ''}`;
+}
+
 function ThemeToggle() {
   const { theme, toggleTheme } = useTheme();
 
@@ -46,6 +50,14 @@ export function Layout() {
             </span>
             Ata IA
           </NavLink>
+          <nav className="topbar-nav">
+            <NavLink to="/reunioes-detectadas" className={navLinkClass}>
+              Reuniões detectadas
+            </NavLink>
+            <NavLink to="/integracoes" className={navLinkClass}>
+              Integrações
+            </NavLink>
+          </nav>
         </div>
         <div className="topbar-user">
           <span className="topbar-email">{user?.email}</span>

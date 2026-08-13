@@ -2,7 +2,7 @@
 // escopo drive.file — o app só enxerga/gerencia os arquivos e pastas que
 // ele mesmo cria, nunca o Drive inteiro do usuário).
 //
-// Requer VITE_GOOGLE_DRIVE_CLIENT_ID configurado (Client ID OAuth2 do
+// Requer VITE_GOOGLE_OAUTH_CLIENT_ID configurado (Client ID OAuth2 do
 // tipo "Web application" no Google Cloud Console, com o domínio do app
 // autorizado). Sem isso, a funcionalidade de salvar no Drive fica
 // desabilitada e o usuário ainda pode baixar o .docx manualmente.
@@ -51,13 +51,13 @@ function carregarScriptGis(): Promise<void> {
 let accessTokenCache: { token: string; expiraEm: number } | null = null;
 
 export function googleDriveConfigurado(): boolean {
-  return Boolean(import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID);
+  return Boolean(import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID);
 }
 
 export async function obterTokenAcessoDrive(): Promise<string> {
-  const clientId = import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID;
+  const clientId = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID;
   if (!clientId) {
-    throw new Error('VITE_GOOGLE_DRIVE_CLIENT_ID não configurado. Veja .env.example.');
+    throw new Error('VITE_GOOGLE_OAUTH_CLIENT_ID não configurado. Veja .env.example.');
   }
 
   if (accessTokenCache && accessTokenCache.expiraEm > Date.now()) {

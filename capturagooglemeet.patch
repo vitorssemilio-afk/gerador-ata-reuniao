@@ -1,0 +1,1546 @@
+From 94a7d623ebb29279b58c25a8cbf0ff4330356d63 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 13 Aug 2026 14:28:02 +0000
+Subject: [PATCH] =?UTF-8?q?Captura=20autom=C3=A1tica=20de=20reuni=C3=B5es?=
+ =?UTF-8?q?=20do=20Google=20Meet=20(v2)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+Cada consultor conecta a própria conta Google Workspace em
+/integracoes (OAuth authorization code, refresh token criptografado
+via pgcrypto + Supabase Vault). Uma Edge Function agendada
+(verificar-reunioes-meet) verifica periodicamente reuniões novas com
+transcrição pronta na API do Meet e grava em reunioes_meet_detectadas
+— sem criar ata nenhuma sozinha, sempre aguardando revisão em
+/reunioes-detectadas ("Criar ata" pré-carrega a transcrição em /nova,
+"Ignorar" descarta).
+
+Renomeia VITE_GOOGLE_DRIVE_CLIENT_ID para VITE_GOOGLE_OAUTH_CLIENT_ID
+(mesmo Client ID passa a ser usado tanto pelo fluxo implícito do Drive
+quanto pelo authorization code do Meet).
+---
+ .env.example                                  |   2 +-
+ README.md                                     | 125 ++++++++++++-
+ src/App.tsx                                   |   6 +
+ src/components/Layout.tsx                     |  12 ++
+ src/index.css                                 |  27 +++
+ src/lib/googleDrive.ts                        |   8 +-
+ src/lib/googleMeetAuth.ts                     |  46 +++++
+ src/pages/ConectarGoogleCallback.tsx          |  72 ++++++++
+ src/pages/Integracoes.tsx                     | 109 +++++++++++
+ src/pages/NovaAta.tsx                         |  80 +++++++--
+ src/pages/ReunioesDetectadas.tsx              | 104 +++++++++++
+ src/types/database.ts                         |  45 ++++-
+ src/vite-env.d.ts                             |   2 +-
+ supabase/functions/_shared/googleOAuth.ts     |  79 ++++++++
+ .../functions/google-meet-conectar/index.ts   |  78 ++++++++
+ .../verificar-reunioes-meet/index.ts          | 115 ++++++++++++
+ .../verificar-reunioes-meet/meetApi.ts        | 154 ++++++++++++++++
+ .../migrations/0002_captura_google_meet.sql   | 169 ++++++++++++++++++
+ 18 files changed, 1203 insertions(+), 30 deletions(-)
+ create mode 100644 src/lib/googleMeetAuth.ts
+ create mode 100644 src/pages/ConectarGoogleCallback.tsx
+ create mode 100644 src/pages/Integracoes.tsx
+ create mode 100644 src/pages/ReunioesDetectadas.tsx
+ create mode 100644 supabase/functions/_shared/googleOAuth.ts
+ create mode 100644 supabase/functions/google-meet-conectar/index.ts
+ create mode 100644 supabase/functions/verificar-reunioes-meet/index.ts
+ create mode 100644 supabase/functions/verificar-reunioes-meet/meetApi.ts
+ create mode 100644 supabase/migrations/0002_captura_google_meet.sql
+
+diff --git a/.env.example b/.env.example
+index e533206..29375f9 100644
+--- a/.env.example
++++ b/.env.example
+@@ -4,4 +4,4 @@ VITE_SUPABASE_ANON_KEY=your-anon-key-here
+ # Opcional — habilita o botão "Salvar no Google Drive" nas atas de reunião.
+ # Client ID OAuth2 (tipo "Web application") criado no Google Cloud Console,
+ # com o domínio do app autorizado em "Authorized JavaScript origins".
+-VITE_GOOGLE_DRIVE_CLIENT_ID=
++VITE_GOOGLE_OAUTH_CLIENT_ID=
+diff --git a/README.md b/README.md
+index 38ed3ff..7b3fcbd 100644
+--- a/README.md
++++ b/README.md
+@@ -4,10 +4,10 @@ App que recebe a transcrição de uma reunião online (Google Meet ou Zoom) e ge
+ uma ata de reunião em dois formatos: um texto pronto pra colar no WhatsApp e um documento Word
+ (`.docx`) completo, com opção de salvar direto no Google Drive.
+ 
+-**v1 é upload manual da transcrição** — captura automática direto da API do Zoom/Meet fica pra v2,
+-porque exige aprovação de app e OAuth com escopos de gravação. O fluxo atual é: exportar a
+-transcrição do Zoom/Meet (`.vtt`/`.srt`, formato padrão de ambos) ou colar o texto, revisar/editar
+-o resultado da IA e só então copiar/baixar/salvar.
++**v1 é upload manual da transcrição** (exportar `.vtt`/`.srt` do Zoom/Meet ou colar o texto).
++A partir da v2, quem usa Google Meet com Workspace pode conectar a própria conta e deixar o app
++detectar reuniões novas sozinho — ver seção "Captura automática (Google Meet)" abaixo. Em ambos os
++casos, o resultado da IA sempre passa por revisão humana antes de copiar/baixar/salvar.
+ 
+ ## Setup
+ 
+@@ -29,7 +29,12 @@ npm run dev
+ - `/` — histórico de atas geradas, com busca por cliente, assunto ou data
+ - `/nova` — upload do arquivo (`.txt`/`.vtt`/`.srt`) ou colar a transcrição, mais os metadados da
+   reunião (cliente/projeto, assunto, data, horário, participantes — opcional, a IA tenta
+-  identificar os falantes pela transcrição se não informado)
++  identificar os falantes pela transcrição se não informado). Quando aberta a partir de uma
++  reunião detectada automaticamente (`?reuniao_detectada_id=...`), a transcrição já vem
++  pré-carregada
++- `/integracoes` — conectar/desconectar contas Google Meet pra captura automática
++- `/reunioes-detectadas` — reuniões novas que a verificação automática encontrou, aguardando
++  revisão (criar ata ou ignorar)
+ - `/:id` — revisão: todos os campos que a IA extraiu (pauta, tópicos discutidos, decisões, ações
+   com responsável/prazo, pendências, próxima reunião) ficam editáveis antes de finalizar — a IA
+   erra nome e prazo às vezes, por isso a v1 nunca envia nada automaticamente, sempre passa por
+@@ -40,7 +45,7 @@ npm run dev
+   - **Baixar Word (.docx)**: documento com título, tabela de cabeçalho (cliente/data/participantes),
+     uma seção por tópico discutido, tabela de ações e listas de decisões/pendências — gerado no
+     navegador com a biblioteca `docx` (`src/lib/exportAtaDocx.ts`), sem precisar de backend
+-  - **Salvar no Google Drive**: só aparece se `VITE_GOOGLE_DRIVE_CLIENT_ID` estiver configurado
++  - **Salvar no Google Drive**: só aparece se `VITE_GOOGLE_OAUTH_CLIENT_ID` estiver configurado
+     (ver abaixo); cria (ou reaproveita) uma pasta `Atas de Reunião/<Cliente>` e sobe o `.docx` lá,
+     nomeado `Ata_<Cliente>_<dd-mm-aaaa>.docx`
+ 
+@@ -89,11 +94,117 @@ gerencia os arquivos/pastas que ele mesmo cria, nunca o Drive inteiro do usuári
+    client ID** do tipo "Web application".
+ 2. Em "Authorized JavaScript origins", adicione a URL onde o app roda (ex:
+    `http://localhost:5173` em dev, e o domínio de produção).
+-3. Copie o Client ID pra `VITE_GOOGLE_DRIVE_CLIENT_ID` no `.env.local`.
++3. Copie o Client ID pra `VITE_GOOGLE_OAUTH_CLIENT_ID` no `.env.local`.
+ 
+ Sem essa variável configurada, o botão "Salvar no Google Drive" simplesmente não aparece — baixar
+ o `.docx` manualmente continua funcionando normalmente.
+ 
++## Captura automática (Google Meet)
++
++Cada consultor conecta a própria conta Google em `/integracoes`. A partir daí, uma Edge Function
++agendada (`verificar-reunioes-meet`) roda periodicamente, verifica se teve reunião nova com
++transcrição pronta na API do Google Meet, e grava em `/reunioes-detectadas` — sem gerar nenhuma ata
++sozinha, sempre esperando o consultor revisar e confirmar.
++
++**Só funciona pra contas Google Workspace com a transcrição de reuniões do Meet habilitada**
++(Business Standard ou superior) — conta Gmail pessoal não gera transcrição nenhuma.
++
++### 1. Habilitar a API do Meet e os escopos
++
++No mesmo projeto do Google Cloud usado pro Drive:
++
++1. **APIs e Serviços → Biblioteca** → procura "Google Meet API" → **Ativar**
++2. **APIs e Serviços → Credenciais** → abre o Client ID OAuth que você já criou pro Drive → copia o
++   **Client Secret** (diferente do Client ID — esse aqui é secreto, nunca vai pro front)
++3. No mesmo Client ID, em **URIs de redirecionamento autorizados**, adiciona:
++   `http://localhost:5173/conectar-google/callback` (e a URL de produção, quando publicar)
++4. Na **Tela de consentimento OAuth**, garante que os escopos `.../auth/meetings.space.readonly` e
++   `email` estão liberados (o app já pede os dois automaticamente na hora de conectar — só
++   confirma que a tela de consentimento não bloqueia escopo sensível sem estar configurada)
++
++Como o escopo do Meet é "sensível", quem for conectar vê um aviso de "app não verificado" — pra uso
++interno com poucos consultores (até 100), dá pra seguir assim sem passar pela verificação completa
++do Google.
++
++### 2. Secrets da Edge Function
++
++```bash
++supabase secrets set GOOGLE_OAUTH_CLIENT_ID=seu-client-id.apps.googleusercontent.com
++supabase secrets set GOOGLE_OAUTH_CLIENT_SECRET=seu-client-secret
++```
++
++### 3. Chave de criptografia no Supabase Vault
++
++O refresh token de cada consultor fica criptografado no banco (nunca em texto puro). Ative o Vault
++em **Database → Extensions → supabase_vault** (se ainda não estiver ativo) e crie um secret chamado
++`google_meet_oauth_key` com um valor aleatório forte — pelo SQL Editor:
++
++```sql
++select vault.create_secret('cole-aqui-um-valor-aleatorio-forte', 'google_meet_oauth_key');
++```
++
++(gere o valor aleatório com `openssl rand -hex 32`, por exemplo — guarde num gerenciador de senhas,
++não precisa lembrar dele, só existe pra isso)
++
++### 4. Deploy das funções
++
++```bash
++supabase functions deploy google-meet-conectar
++supabase functions deploy verificar-reunioes-meet
++```
++
++### 5. Agendar a verificação periódica
++
++`verificar-reunioes-meet` não é chamada pelo front — precisa de um cron chamando ela por fora. Com
++as extensões `pg_cron` e `pg_net` ativas (**Database → Extensions**), cria outro secret no Vault com
++a **service_role key** do projeto (Project Settings → API) e agenda o job pelo SQL Editor:
++
++```sql
++select vault.create_secret('sua-service-role-key-aqui', 'service_role_key');
++
++select cron.schedule(
++  'verificar-reunioes-meet',
++  '*/15 * * * *', -- a cada 15 minutos; ajuste como preferir
++  $$
++  select net.http_post(
++    url := 'https://SEU_PROJECT_REF.supabase.co/functions/v1/verificar-reunioes-meet',
++    headers := jsonb_build_object(
++      'Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key'),
++      'Content-Type', 'application/json'
++    ),
++    body := '{}'::jsonb
++  );
++  $$
++);
++```
++
++A função usa essa mesma service role key (repassada no header `Authorization`) como autenticação —
++ela roda sem usuário logado, então não faz sentido usar JWT de sessão.
++
++### Como funciona por dentro
++
++- **Conexão** (`/integracoes` → `iniciarConexaoGoogleMeet`, `src/lib/googleMeetAuth.ts`): monta a URL
++  de autorização do Google (`access_type=offline`, `prompt=consent` — garante que sempre vem um
++  refresh token) e redireciona. O Google volta pra `/conectar-google/callback` com um `code`.
++- **Troca do code** (Edge Function `google-meet-conectar`): o `code` só pode ser usado uma vez, e a
++  troca por tokens exige o Client Secret — por isso acontece no servidor, nunca no navegador. Salva
++  o refresh token criptografado via `salvar_conexao_google_meet` (RPC).
++- **Verificação periódica** (Edge Function `verificar-reunioes-meet`, `meetApi.ts`): pra cada conexão,
++  renova o access token, lista `conferenceRecords` terminados desde a última verificação, busca a
++  transcrição de cada um (`transcripts` → `entries`, com os nomes dos participantes resolvidos via
++  `participants`), monta o texto no formato `Nome: fala` (mesmo formato que o parser de `.vtt`/`.srt`
++  já produz) e grava em `reunioes_meet_detectadas` — deduplicado por `conference_record_name`.
++- **Revisão** (`/reunioes-detectadas`): lista as reuniões pendentes; "Criar ata" abre `/nova` com a
++  transcrição pré-carregada (só falta cliente/projeto e assunto), "Ignorar" descarta.
++
++### Tabelas `conexoes_google_meet` e `reunioes_meet_detectadas`
++
++`conexoes_google_meet` guarda uma linha por consultor conectado (e-mail da conta Google, refresh
++token criptografado, última verificação) — RLS restrito ao próprio usuário; o refresh token só é
++lido pela função `listar_conexoes_google_meet_para_verificacao`, restrita à `service_role`, nunca
++pelo client. `reunioes_meet_detectadas` guarda as reuniões encontradas (`status`: `pendente` →
++`ata_criada` ou `ignorada`), também restrita ao próprio usuário via RLS.
++
+ ## Tabela `atas_reuniao`
+ 
+ Guarda cliente/projeto, assunto, data/horário, participantes, a transcrição original, `status`
+diff --git a/src/App.tsx b/src/App.tsx
+index 04d2a8d..a9b575d 100644
+--- a/src/App.tsx
++++ b/src/App.tsx
+@@ -5,8 +5,11 @@ import { AuthProvider } from './contexts/AuthContext';
+ import { ThemeProvider } from './contexts/ThemeContext';
+ import { AtaDetalhe } from './pages/AtaDetalhe';
+ import { Atas } from './pages/Atas';
++import { ConectarGoogleCallback } from './pages/ConectarGoogleCallback';
++import { Integracoes } from './pages/Integracoes';
+ import { Login } from './pages/Login';
+ import { NovaAta } from './pages/NovaAta';
++import { ReunioesDetectadas } from './pages/ReunioesDetectadas';
+ 
+ function App() {
+   return (
+@@ -24,6 +27,9 @@ function App() {
+             >
+               <Route path="/" element={<Atas />} />
+               <Route path="/nova" element={<NovaAta />} />
++              <Route path="/integracoes" element={<Integracoes />} />
++              <Route path="/reunioes-detectadas" element={<ReunioesDetectadas />} />
++              <Route path="/conectar-google/callback" element={<ConectarGoogleCallback />} />
+               <Route path="/:id" element={<AtaDetalhe />} />
+             </Route>
+             <Route path="*" element={<Navigate to="/" replace />} />
+diff --git a/src/components/Layout.tsx b/src/components/Layout.tsx
+index c2e1506..9b79ff0 100644
+--- a/src/components/Layout.tsx
++++ b/src/components/Layout.tsx
+@@ -2,6 +2,10 @@ import { NavLink, Outlet } from 'react-router-dom';
+ import { useAuth } from '../contexts/AuthContext';
+ import { useTheme } from '../contexts/ThemeContext';
+ 
++function navLinkClass({ isActive }: { isActive: boolean }): string {
++  return `topbar-nav-link${isActive ? ' active' : ''}`;
++}
++
+ function ThemeToggle() {
+   const { theme, toggleTheme } = useTheme();
+ 
+@@ -46,6 +50,14 @@ export function Layout() {
+             </span>
+             Ata IA
+           </NavLink>
++          <nav className="topbar-nav">
++            <NavLink to="/reunioes-detectadas" className={navLinkClass}>
++              Reuniões detectadas
++            </NavLink>
++            <NavLink to="/integracoes" className={navLinkClass}>
++              Integrações
++            </NavLink>
++          </nav>
+         </div>
+         <div className="topbar-user">
+           <span className="topbar-email">{user?.email}</span>
+diff --git a/src/index.css b/src/index.css
+index f1c15b0..906a41a 100644
+--- a/src/index.css
++++ b/src/index.css
+@@ -169,6 +169,33 @@ a {
+   flex-shrink: 0;
+ }
+ 
++.topbar-nav {
++  display: flex;
++  align-items: center;
++  gap: 4px;
++  margin-left: 28px;
++}
++
++.topbar-nav-link {
++  font-size: 13px;
++  font-weight: 500;
++  color: var(--color-text-muted);
++  text-decoration: none;
++  padding: 6px 12px;
++  border-radius: var(--radius-sm);
++  transition: background-color 0.15s ease, color 0.15s ease;
++}
++
++.topbar-nav-link:hover {
++  background: var(--color-surface-raised);
++  color: var(--color-text);
++}
++
++.topbar-nav-link.active {
++  background: var(--color-accent-soft);
++  color: var(--color-accent);
++}
++
+ .topbar-user {
+   display: flex;
+   align-items: center;
+diff --git a/src/lib/googleDrive.ts b/src/lib/googleDrive.ts
+index f4a1feb..af06d32 100644
+--- a/src/lib/googleDrive.ts
++++ b/src/lib/googleDrive.ts
+@@ -2,7 +2,7 @@
+ // escopo drive.file — o app só enxerga/gerencia os arquivos e pastas que
+ // ele mesmo cria, nunca o Drive inteiro do usuário).
+ //
+-// Requer VITE_GOOGLE_DRIVE_CLIENT_ID configurado (Client ID OAuth2 do
++// Requer VITE_GOOGLE_OAUTH_CLIENT_ID configurado (Client ID OAuth2 do
+ // tipo "Web application" no Google Cloud Console, com o domínio do app
+ // autorizado). Sem isso, a funcionalidade de salvar no Drive fica
+ // desabilitada e o usuário ainda pode baixar o .docx manualmente.
+@@ -51,13 +51,13 @@ function carregarScriptGis(): Promise<void> {
+ let accessTokenCache: { token: string; expiraEm: number } | null = null;
+ 
+ export function googleDriveConfigurado(): boolean {
+-  return Boolean(import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID);
++  return Boolean(import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID);
+ }
+ 
+ export async function obterTokenAcessoDrive(): Promise<string> {
+-  const clientId = import.meta.env.VITE_GOOGLE_DRIVE_CLIENT_ID;
++  const clientId = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID;
+   if (!clientId) {
+-    throw new Error('VITE_GOOGLE_DRIVE_CLIENT_ID não configurado. Veja .env.example.');
++    throw new Error('VITE_GOOGLE_OAUTH_CLIENT_ID não configurado. Veja .env.example.');
+   }
+ 
+   if (accessTokenCache && accessTokenCache.expiraEm > Date.now()) {
+diff --git a/src/lib/googleMeetAuth.ts b/src/lib/googleMeetAuth.ts
+new file mode 100644
+index 0000000..52b8357
+--- /dev/null
++++ b/src/lib/googleMeetAuth.ts
+@@ -0,0 +1,46 @@
++// Conexão com o Google Meet via OAuth "authorization code" (diferente
++// do fluxo usado pro Drive — aqui precisamos de um refresh token de
++// longa duração, porque a verificação de reuniões novas roda em
++// segundo plano, sem o consultor com o app aberto). A troca do code
++// pelos tokens acontece só no servidor (Edge Function
++// google-meet-conectar), nunca no navegador — exige o Client Secret,
++// que não pode ficar exposto no front.
++
++// "email" além do escopo do Meet: é o que faz o endpoint de userinfo
++// (chamado pela Edge Function google-meet-conectar pra identificar a
++// conta conectada) devolver o e-mail — sem ele a resposta vem sem esse
++// campo, mesmo com o access token válido.
++const MEET_SCOPE = 'https://www.googleapis.com/auth/meetings.space.readonly email';
++const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
++
++export function googleMeetConfigurado(): boolean {
++  return Boolean(import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID);
++}
++
++export function urlCallbackGoogleMeet(): string {
++  return `${window.location.origin}/conectar-google/callback`;
++}
++
++// Reaproveita o mesmo Client ID OAuth já usado pro Google Drive (é o
++// mesmo tipo de credencial "Aplicativo da Web" no Google Cloud) — só
++// precisa garantir que a URL de callback abaixo esteja cadastrada nas
++// "Origens JavaScript autorizadas" e nos "URIs de redirecionamento
++// autorizados" desse Client ID.
++export function iniciarConexaoGoogleMeet(): void {
++  const clientId = import.meta.env.VITE_GOOGLE_OAUTH_CLIENT_ID;
++  if (!clientId) {
++    throw new Error('VITE_GOOGLE_OAUTH_CLIENT_ID não configurado. Veja .env.example.');
++  }
++
++  const params = new URLSearchParams({
++    client_id: clientId,
++    redirect_uri: urlCallbackGoogleMeet(),
++    response_type: 'code',
++    scope: MEET_SCOPE,
++    access_type: 'offline',
++    prompt: 'consent',
++    include_granted_scopes: 'true',
++  });
++
++  window.location.href = `${GOOGLE_AUTH_URL}?${params.toString()}`;
++}
+diff --git a/src/pages/ConectarGoogleCallback.tsx b/src/pages/ConectarGoogleCallback.tsx
+new file mode 100644
+index 0000000..dfac3be
+--- /dev/null
++++ b/src/pages/ConectarGoogleCallback.tsx
+@@ -0,0 +1,72 @@
++import { useEffect, useState } from 'react';
++import { Link, useSearchParams } from 'react-router-dom';
++import { urlCallbackGoogleMeet } from '../lib/googleMeetAuth';
++import { supabase } from '../lib/supabaseClient';
++
++type Estado = 'processando' | 'sucesso' | 'erro';
++
++export function ConectarGoogleCallback() {
++  const [searchParams] = useSearchParams();
++  const [estado, setEstado] = useState<Estado>('processando');
++  const [mensagem, setMensagem] = useState<string | null>(null);
++
++  useEffect(() => {
++    const code = searchParams.get('code');
++    const erroOAuth = searchParams.get('error');
++
++    if (erroOAuth) {
++      setEstado('erro');
++      setMensagem(
++        erroOAuth === 'access_denied'
++          ? 'Você cancelou a autorização.'
++          : `O Google recusou a autorização: ${erroOAuth}`,
++      );
++      return;
++    }
++
++    if (!code) {
++      setEstado('erro');
++      setMensagem('Nenhum código de autorização recebido do Google.');
++      return;
++    }
++
++    supabase.functions
++      .invoke('google-meet-conectar', { body: { code, redirect_uri: urlCallbackGoogleMeet() } })
++      .then(({ data, error }) => {
++        if (error || data?.error) {
++          setEstado('erro');
++          setMensagem(data?.error ?? error?.message ?? 'Falha ao conectar com o Google.');
++          return;
++        }
++        setEstado('sucesso');
++        setMensagem(data?.google_email ?? null);
++      });
++    // Roda só uma vez, ao montar — o "code" só pode ser trocado uma vez pelo Google.
++  }, [searchParams]);
++
++  return (
++    <div className="auth-screen">
++      <div className="auth-card">
++        {estado === 'processando' && <p className="page-loading">Conectando com o Google…</p>}
++
++        {estado === 'sucesso' && (
++          <div className="auth-form">
++            <p className="form-info">Conta {mensagem} conectada com sucesso.</p>
++            <Link to="/integracoes" className="btn btn-primary">
++              Voltar pra Integrações
++            </Link>
++          </div>
++        )}
++
++        {estado === 'erro' && (
++          <div className="auth-form">
++            <p className="form-error">{mensagem}</p>
++            <Link to="/integracoes" className="btn btn-secondary">
++              Voltar pra Integrações
++            </Link>
++          </div>
++        )}
++      </div>
++    </div>
++  );
++}
+diff --git a/src/pages/Integracoes.tsx b/src/pages/Integracoes.tsx
+new file mode 100644
+index 0000000..9784258
+--- /dev/null
++++ b/src/pages/Integracoes.tsx
+@@ -0,0 +1,109 @@
++import { useEffect, useState } from 'react';
++import { googleMeetConfigurado, iniciarConexaoGoogleMeet } from '../lib/googleMeetAuth';
++import { supabase } from '../lib/supabaseClient';
++import type { ConexaoGoogleMeet } from '../types/database';
++
++function formatarDataHora(iso: string | null): string {
++  if (!iso) return 'nunca';
++  return new Date(iso).toLocaleString('pt-BR');
++}
++
++export function Integracoes() {
++  const [conexoes, setConexoes] = useState<ConexaoGoogleMeet[]>([]);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState<string | null>(null);
++  const [removendo, setRemovendo] = useState<string | null>(null);
++
++  useEffect(() => {
++    carregar();
++  }, []);
++
++  async function carregar() {
++    setLoading(true);
++    const { data, error: fetchError } = await supabase
++      .from('conexoes_google_meet')
++      .select('*')
++      .order('created_at', { ascending: false });
++
++    if (fetchError) setError(fetchError.message);
++    else setConexoes(data ?? []);
++    setLoading(false);
++  }
++
++  async function desconectar(id: string) {
++    setRemovendo(id);
++    const { error: deleteError } = await supabase.from('conexoes_google_meet').delete().eq('id', id);
++    if (deleteError) setError(deleteError.message);
++    else setConexoes((atual) => atual.filter((c) => c.id !== id));
++    setRemovendo(null);
++  }
++
++  return (
++    <div className="page">
++      <div className="page-header">
++        <h1>Integrações</h1>
++      </div>
++
++      <div className="card form-card">
++        <h2>Google Meet — captura automática</h2>
++        <p className="field-hint">
++          Conecta sua conta Google (precisa ser Workspace com transcrição de reuniões habilitada). A
++          partir daí, reuniões novas com transcrição pronta aparecem em{' '}
++          <strong>Reuniões detectadas</strong> pra você revisar e gerar a ata — nada é criado
++          automaticamente sem sua confirmação.
++        </p>
++
++        {!googleMeetConfigurado() && (
++          <p className="form-error">
++            VITE_GOOGLE_OAUTH_CLIENT_ID não configurado — veja o README pra habilitar essa
++            integração.
++          </p>
++        )}
++
++        {error && <p className="form-error">{error}</p>}
++        {loading && <p className="page-loading">Carregando…</p>}
++
++        {!loading && conexoes.length > 0 && (
++          <div className="table-wrap">
++            <table className="data-table">
++              <thead>
++                <tr>
++                  <th>Conta Google</th>
++                  <th>Última verificação</th>
++                  <th />
++                </tr>
++              </thead>
++              <tbody>
++                {conexoes.map((conexao) => (
++                  <tr key={conexao.id}>
++                    <td>{conexao.google_email}</td>
++                    <td>{formatarDataHora(conexao.ultima_verificacao)}</td>
++                    <td className="table-actions">
++                      <button
++                        type="button"
++                        className="link-button"
++                        onClick={() => desconectar(conexao.id)}
++                        disabled={removendo === conexao.id}
++                      >
++                        {removendo === conexao.id ? 'Removendo…' : 'Desconectar'}
++                      </button>
++                    </td>
++                  </tr>
++                ))}
++              </tbody>
++            </table>
++          </div>
++        )}
++
++        <button
++          type="button"
++          className="btn btn-primary btn-auto"
++          onClick={iniciarConexaoGoogleMeet}
++          disabled={!googleMeetConfigurado()}
++        >
++          + Conectar conta Google
++        </button>
++      </div>
++    </div>
++  );
++}
+diff --git a/src/pages/NovaAta.tsx b/src/pages/NovaAta.tsx
+index c0eeeb4..c9fdee4 100644
+--- a/src/pages/NovaAta.tsx
++++ b/src/pages/NovaAta.tsx
+@@ -1,16 +1,24 @@
+-import { useRef, useState } from 'react';
+-import { useNavigate } from 'react-router-dom';
++import { useEffect, useRef, useState } from 'react';
++import { useNavigate, useSearchParams } from 'react-router-dom';
+ import { useAuth } from '../contexts/AuthContext';
+ import { lerArquivoTranscricao, normalizarTranscricao } from '../lib/parseTranscricao';
+ import { supabase } from '../lib/supabaseClient';
+ 
+ const EXTENSOES_ACEITAS = '.txt,.vtt,.srt';
+ 
++function horaLocal(iso: string | null): string {
++  if (!iso) return '';
++  return new Date(iso).toTimeString().slice(0, 5);
++}
++
+ export function NovaAta() {
+   const { user } = useAuth();
+   const navigate = useNavigate();
++  const [searchParams] = useSearchParams();
+   const fileInputRef = useRef<HTMLInputElement>(null);
+ 
++  const reuniaoDetectadaId = searchParams.get('reuniao_detectada_id');
++
+   const [cliente, setCliente] = useState('');
+   const [assunto, setAssunto] = useState('');
+   const [dataReuniao, setDataReuniao] = useState(() => new Date().toISOString().slice(0, 10));
+@@ -21,6 +29,29 @@ export function NovaAta() {
+   const [nomeArquivo, setNomeArquivo] = useState<string | null>(null);
+   const [enviando, setEnviando] = useState(false);
+   const [error, setError] = useState<string | null>(null);
++  const [carregandoDetectada, setCarregandoDetectada] = useState(Boolean(reuniaoDetectadaId));
++
++  useEffect(() => {
++    if (!reuniaoDetectadaId) return;
++
++    supabase
++      .from('reunioes_meet_detectadas')
++      .select('*')
++      .eq('id', reuniaoDetectadaId)
++      .single()
++      .then(({ data, error: fetchError }) => {
++        if (fetchError || !data) {
++          setError(fetchError?.message ?? 'Reunião detectada não encontrada.');
++        } else {
++          setAssunto(data.titulo ?? '');
++          if (data.iniciado_em) setDataReuniao(new Date(data.iniciado_em).toISOString().slice(0, 10));
++          setHoraInicio(horaLocal(data.iniciado_em));
++          setHoraFim(horaLocal(data.finalizado_em));
++          setTranscricao(data.transcricao);
++        }
++        setCarregandoDetectada(false);
++      });
++  }, [reuniaoDetectadaId]);
+ 
+   async function handleArquivo(e: React.ChangeEvent<HTMLInputElement>) {
+     const file = e.target.files?.[0];
+@@ -84,6 +115,13 @@ export function NovaAta() {
+       return;
+     }
+ 
++    if (reuniaoDetectadaId) {
++      await supabase
++        .from('reunioes_meet_detectadas')
++        .update({ status: 'ata_criada', ata_id: ata.id })
++        .eq('id', reuniaoDetectadaId);
++    }
++
+     await supabase.functions.invoke('gerar-ata', {
+       body: { ata_id: ata.id },
+     });
+@@ -97,6 +135,13 @@ export function NovaAta() {
+         <h1>Nova ata de reunião</h1>
+       </div>
+ 
++      {reuniaoDetectadaId && (
++        <p className="form-info">
++          Transcrição pré-carregada de uma reunião detectada automaticamente no Google Meet. Só
++          falta preencher cliente/projeto e assunto.
++        </p>
++      )}
++
+       <form className="card form-card" onSubmit={handleSubmit}>
+         {error && <p className="form-error">{error}</p>}
+ 
+@@ -136,21 +181,23 @@ export function NovaAta() {
+           </label>
+         </div>
+ 
+-        <label className="field field-full">
+-          <span>Transcrição (.txt, .vtt ou .srt exportado do Zoom/Meet)</span>
+-          <input ref={fileInputRef} type="file" accept={EXTENSOES_ACEITAS} onChange={handleArquivo} />
+-          {nomeArquivo && (
+-            <span className="field-hint">
+-              Arquivo carregado: {nomeArquivo}{' '}
+-              <button type="button" className="link-button" onClick={limparArquivo}>
+-                remover
+-              </button>
+-            </span>
+-          )}
+-        </label>
++        {!reuniaoDetectadaId && (
++          <label className="field field-full">
++            <span>Transcrição (.txt, .vtt ou .srt exportado do Zoom/Meet)</span>
++            <input ref={fileInputRef} type="file" accept={EXTENSOES_ACEITAS} onChange={handleArquivo} />
++            {nomeArquivo && (
++              <span className="field-hint">
++                Arquivo carregado: {nomeArquivo}{' '}
++                <button type="button" className="link-button" onClick={limparArquivo}>
++                  remover
++                </button>
++              </span>
++            )}
++          </label>
++        )}
+ 
+         <label className="field field-full">
+-          <span>Ou cole o texto da transcrição aqui</span>
++          <span>{reuniaoDetectadaId ? 'Transcrição (capturada automaticamente — pode editar)' : 'Ou cole o texto da transcrição aqui'}</span>
+           <textarea
+             rows={10}
+             value={transcricao}
+@@ -159,10 +206,11 @@ export function NovaAta() {
+               setNomeArquivo(null);
+             }}
+             placeholder="Cole aqui a transcrição da reunião…"
++            disabled={carregandoDetectada}
+           />
+         </label>
+ 
+-        <button type="submit" className="btn btn-primary btn-auto" disabled={enviando}>
++        <button type="submit" className="btn btn-primary btn-auto" disabled={enviando || carregandoDetectada}>
+           {enviando ? 'Gerando ata…' : 'Gerar ata com IA'}
+         </button>
+       </form>
+diff --git a/src/pages/ReunioesDetectadas.tsx b/src/pages/ReunioesDetectadas.tsx
+new file mode 100644
+index 0000000..f2a3082
+--- /dev/null
++++ b/src/pages/ReunioesDetectadas.tsx
+@@ -0,0 +1,104 @@
++import { useEffect, useState } from 'react';
++import { Link } from 'react-router-dom';
++import { supabase } from '../lib/supabaseClient';
++import type { ReuniaoMeetDetectada } from '../types/database';
++
++function formatarDataHora(iso: string | null): string {
++  if (!iso) return '—';
++  return new Date(iso).toLocaleString('pt-BR');
++}
++
++export function ReunioesDetectadas() {
++  const [reunioes, setReunioes] = useState<ReuniaoMeetDetectada[]>([]);
++  const [loading, setLoading] = useState(true);
++  const [error, setError] = useState<string | null>(null);
++  const [ignorando, setIgnorando] = useState<string | null>(null);
++
++  useEffect(() => {
++    carregar();
++  }, []);
++
++  async function carregar() {
++    setLoading(true);
++    const { data, error: fetchError } = await supabase
++      .from('reunioes_meet_detectadas')
++      .select('*')
++      .eq('status', 'pendente')
++      .order('finalizado_em', { ascending: false });
++
++    if (fetchError) setError(fetchError.message);
++    else setReunioes(data ?? []);
++    setLoading(false);
++  }
++
++  async function ignorar(id: string) {
++    setIgnorando(id);
++    const { error: updateError } = await supabase
++      .from('reunioes_meet_detectadas')
++      .update({ status: 'ignorada' })
++      .eq('id', id);
++
++    if (updateError) setError(updateError.message);
++    else setReunioes((atual) => atual.filter((r) => r.id !== id));
++    setIgnorando(null);
++  }
++
++  return (
++    <div className="page">
++      <div className="page-header">
++        <div>
++          <h1>Reuniões detectadas</h1>
++          <p className="field-hint">
++            Reuniões do Google Meet com transcrição pronta, encontradas automaticamente pelas contas
++            conectadas em <Link to="/integracoes">Integrações</Link>. Nenhuma ata é criada sem você
++            confirmar.
++          </p>
++        </div>
++      </div>
++
++      {loading && <p className="page-loading">Carregando…</p>}
++      {error && <p className="form-error">{error}</p>}
++
++      {!loading && !error && reunioes.length === 0 && (
++        <div className="empty-state">
++          <p>Nenhuma reunião nova aguardando revisão.</p>
++        </div>
++      )}
++
++      {!loading && reunioes.length > 0 && (
++        <div className="table-wrap">
++          <table className="data-table">
++            <thead>
++              <tr>
++                <th>Reunião</th>
++                <th>Data</th>
++                <th />
++              </tr>
++            </thead>
++            <tbody>
++              {reunioes.map((reuniao) => (
++                <tr key={reuniao.id}>
++                  <td>{reuniao.titulo ?? 'Reunião do Meet'}</td>
++                  <td>{formatarDataHora(reuniao.finalizado_em)}</td>
++                  <td className="table-actions">
++                    <Link to={`/nova?reuniao_detectada_id=${reuniao.id}`} className="btn btn-secondary">
++                      Criar ata
++                    </Link>{' '}
++                    <button
++                      type="button"
++                      className="link-button"
++                      onClick={() => ignorar(reuniao.id)}
++                      disabled={ignorando === reuniao.id}
++                    >
++                      {ignorando === reuniao.id ? 'Ignorando…' : 'Ignorar'}
++                    </button>
++                  </td>
++                </tr>
++              ))}
++            </tbody>
++          </table>
++        </div>
++      )}
++    </div>
++  );
++}
+diff --git a/src/types/database.ts b/src/types/database.ts
+index a2b85db..1b8942d 100644
+--- a/src/types/database.ts
++++ b/src/types/database.ts
+@@ -36,6 +36,31 @@ export type AtaReuniao = {
+   updated_at: string;
+ };
+ 
++export type ConexaoGoogleMeet = {
++  id: string;
++  user_id: string;
++  google_email: string;
++  ultima_verificacao: string | null;
++  created_at: string;
++  updated_at: string;
++};
++
++export type ReuniaoMeetStatus = 'pendente' | 'ignorada' | 'ata_criada';
++
++export type ReuniaoMeetDetectada = {
++  id: string;
++  conexao_id: string;
++  user_id: string;
++  conference_record_name: string;
++  titulo: string | null;
++  iniciado_em: string | null;
++  finalizado_em: string | null;
++  transcricao: string;
++  status: ReuniaoMeetStatus;
++  ata_id: string | null;
++  created_at: string;
++};
++
+ export type Database = {
+   __InternalSupabase: {
+     PostgrestVersion: '13';
+@@ -48,9 +73,27 @@ export type Database = {
+         Update: Partial<AtaReuniao>;
+         Relationships: [];
+       };
++      conexoes_google_meet: {
++        Row: ConexaoGoogleMeet;
++        Insert: Partial<ConexaoGoogleMeet> & Pick<ConexaoGoogleMeet, 'user_id' | 'google_email'>;
++        Update: Partial<ConexaoGoogleMeet>;
++        Relationships: [];
++      };
++      reunioes_meet_detectadas: {
++        Row: ReuniaoMeetDetectada;
++        Insert: Partial<ReuniaoMeetDetectada> &
++          Pick<ReuniaoMeetDetectada, 'conexao_id' | 'user_id' | 'conference_record_name'>;
++        Update: Partial<ReuniaoMeetDetectada>;
++        Relationships: [];
++      };
+     };
+     Views: Record<string, never>;
+-    Functions: Record<string, never>;
++    Functions: {
++      salvar_conexao_google_meet: {
++        Args: { p_google_email: string; p_refresh_token: string };
++        Returns: string;
++      };
++    };
+     Enums: Record<string, never>;
+     CompositeTypes: {
+       [_ in never]: never;
+diff --git a/src/vite-env.d.ts b/src/vite-env.d.ts
+index 552d688..dd934d9 100644
+--- a/src/vite-env.d.ts
++++ b/src/vite-env.d.ts
+@@ -3,7 +3,7 @@
+ interface ImportMetaEnv {
+   readonly VITE_SUPABASE_URL: string;
+   readonly VITE_SUPABASE_ANON_KEY: string;
+-  readonly VITE_GOOGLE_DRIVE_CLIENT_ID?: string;
++  readonly VITE_GOOGLE_OAUTH_CLIENT_ID?: string;
+ }
+ 
+ interface ImportMeta {
+diff --git a/supabase/functions/_shared/googleOAuth.ts b/supabase/functions/_shared/googleOAuth.ts
+new file mode 100644
+index 0000000..51870f5
+--- /dev/null
++++ b/supabase/functions/_shared/googleOAuth.ts
+@@ -0,0 +1,79 @@
++const TOKEN_URL = 'https://oauth2.googleapis.com/token';
++const USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo';
++
++export type TokensGoogle = {
++  access_token: string;
++  refresh_token?: string;
++  expires_in: number;
++};
++
++function credenciaisOAuth(): { clientId: string; clientSecret: string } {
++  const clientId = Deno.env.get('GOOGLE_OAUTH_CLIENT_ID');
++  const clientSecret = Deno.env.get('GOOGLE_OAUTH_CLIENT_SECRET');
++  if (!clientId || !clientSecret) {
++    throw new Error('GOOGLE_OAUTH_CLIENT_ID / GOOGLE_OAUTH_CLIENT_SECRET não configuradas nas secrets da função.');
++  }
++  return { clientId, clientSecret };
++}
++
++export async function trocarCodePorTokens(code: string, redirectUri: string): Promise<TokensGoogle> {
++  const { clientId, clientSecret } = credenciaisOAuth();
++
++  const resposta = await fetch(TOKEN_URL, {
++    method: 'POST',
++    headers: { 'content-type': 'application/x-www-form-urlencoded' },
++    body: new URLSearchParams({
++      code,
++      client_id: clientId,
++      client_secret: clientSecret,
++      redirect_uri: redirectUri,
++      grant_type: 'authorization_code',
++    }),
++  });
++
++  if (!resposta.ok) {
++    const texto = await resposta.text();
++    throw new Error(`Falha ao trocar code por tokens: ${resposta.status} ${texto}`);
++  }
++
++  return resposta.json();
++}
++
++export async function renovarAccessToken(refreshToken: string): Promise<TokensGoogle> {
++  const { clientId, clientSecret } = credenciaisOAuth();
++
++  const resposta = await fetch(TOKEN_URL, {
++    method: 'POST',
++    headers: { 'content-type': 'application/x-www-form-urlencoded' },
++    body: new URLSearchParams({
++      refresh_token: refreshToken,
++      client_id: clientId,
++      client_secret: clientSecret,
++      grant_type: 'refresh_token',
++    }),
++  });
++
++  if (!resposta.ok) {
++    const texto = await resposta.text();
++    throw new Error(`Falha ao renovar access token: ${resposta.status} ${texto}`);
++  }
++
++  return resposta.json();
++}
++
++export async function obterEmailDoToken(accessToken: string): Promise<string> {
++  const resposta = await fetch(USERINFO_URL, {
++    headers: { Authorization: `Bearer ${accessToken}` },
++  });
++
++  if (!resposta.ok) {
++    const texto = await resposta.text();
++    throw new Error(`Falha ao obter e-mail do usuário: ${resposta.status} ${texto}`);
++  }
++
++  const dados = await resposta.json();
++  if (typeof dados.email !== 'string') {
++    throw new Error('Resposta do Google não trouxe e-mail do usuário.');
++  }
++  return dados.email;
++}
+diff --git a/supabase/functions/google-meet-conectar/index.ts b/supabase/functions/google-meet-conectar/index.ts
+new file mode 100644
+index 0000000..f9f72f2
+--- /dev/null
++++ b/supabase/functions/google-meet-conectar/index.ts
+@@ -0,0 +1,78 @@
++import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.8';
++import { corsHeaders } from '../_shared/cors.ts';
++import { obterEmailDoToken, trocarCodePorTokens } from '../_shared/googleOAuth.ts';
++
++function jsonResponse(body: unknown, status = 200): Response {
++  return new Response(JSON.stringify(body), {
++    status,
++    headers: { ...corsHeaders, 'content-type': 'application/json' },
++  });
++}
++
++// Recebe o "code" do redirecionamento OAuth (fluxo authorization code,
++// iniciado em src/lib/googleMeetAuth.ts) e troca pelos tokens direto
++// com o Google — o Client Secret nunca fica exposto no navegador,
++// só aqui na Edge Function. Grava o refresh token criptografado via
++// salvar_conexao_google_meet, associado ao usuário autenticado que
++// chamou (JWT repassado pelo front).
++Deno.serve(async (req: Request) => {
++  if (req.method === 'OPTIONS') {
++    return new Response('ok', { headers: corsHeaders });
++  }
++
++  let payload: { code?: unknown; redirect_uri?: unknown } | null = null;
++  try {
++    payload = await req.json();
++  } catch {
++    return jsonResponse({ error: 'Corpo da requisição inválido.' }, 400);
++  }
++
++  const code = payload?.code;
++  const redirectUri = payload?.redirect_uri;
++  if (typeof code !== 'string' || !code || typeof redirectUri !== 'string' || !redirectUri) {
++    return jsonResponse({ error: 'code e redirect_uri são obrigatórios.' }, 400);
++  }
++
++  const authHeader = req.headers.get('Authorization');
++  if (!authHeader) {
++    return jsonResponse({ error: 'Não autenticado.' }, 401);
++  }
++
++  const supabase = createClient(
++    Deno.env.get('SUPABASE_URL')!,
++    Deno.env.get('SUPABASE_ANON_KEY')!,
++    { global: { headers: { Authorization: authHeader } } },
++  );
++
++  try {
++    const tokens = await trocarCodePorTokens(code, redirectUri);
++
++    if (!tokens.refresh_token) {
++      return jsonResponse(
++        {
++          error:
++            'O Google não devolveu um refresh token — normalmente acontece quando essa conta já autorizou o app antes. Revogue o acesso em myaccount.google.com/permissions e tente conectar de novo.',
++        },
++        400,
++      );
++    }
++
++    const email = await obterEmailDoToken(tokens.access_token);
++
++    const { error: rpcError } = await supabase.rpc('salvar_conexao_google_meet', {
++      p_google_email: email,
++      p_refresh_token: tokens.refresh_token,
++    });
++
++    if (rpcError) {
++      console.error('Erro ao salvar conexão do Google Meet', rpcError);
++      return jsonResponse({ error: rpcError.message }, 500);
++    }
++
++    return jsonResponse({ ok: true, google_email: email });
++  } catch (err) {
++    console.error('Erro ao conectar Google Meet', err);
++    const mensagem = String(err instanceof Error ? err.message : err);
++    return jsonResponse({ error: mensagem }, 502);
++  }
++});
+diff --git a/supabase/functions/verificar-reunioes-meet/index.ts b/supabase/functions/verificar-reunioes-meet/index.ts
+new file mode 100644
+index 0000000..69bee96
+--- /dev/null
++++ b/supabase/functions/verificar-reunioes-meet/index.ts
+@@ -0,0 +1,115 @@
++import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.110.8';
++import { corsHeaders } from '../_shared/cors.ts';
++import { renovarAccessToken } from '../_shared/googleOAuth.ts';
++import { listarConferenciasRecentes, obterTranscricaoDaReuniao } from './meetApi.ts';
++
++function jsonResponse(body: unknown, status = 200): Response {
++  return new Response(JSON.stringify(body), {
++    status,
++    headers: { ...corsHeaders, 'content-type': 'application/json' },
++  });
++}
++
++// Sem verificação anterior, olha só as últimas 24h pra não varrer o
++// histórico inteiro de conferências na primeira execução de cada
++// conexão.
++const JANELA_PRIMEIRA_VERIFICACAO_HORAS = 24;
++
++type ConexaoParaVerificar = {
++  id: string;
++  user_id: string;
++  google_email: string;
++  refresh_token: string;
++  ultima_verificacao: string | null;
++};
++
++// Chamada por um cron (ver README) — não é acionada pelo front. Usa a
++// service_role key porque roda sem usuário logado, pra poder ler o
++// token de todas as conexões via listar_conexoes_google_meet_para_verificacao
++// (RPC restrita a essa role) e gravar reuniões detectadas de qualquer
++// usuário.
++Deno.serve(async (req: Request) => {
++  if (req.method === 'OPTIONS') {
++    return new Response('ok', { headers: corsHeaders });
++  }
++
++  const authHeader = req.headers.get('Authorization') ?? '';
++  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
++  if (authHeader !== `Bearer ${serviceRoleKey}`) {
++    return jsonResponse({ error: 'Não autorizado.' }, 401);
++  }
++
++  const supabase = createClient(Deno.env.get('SUPABASE_URL')!, serviceRoleKey);
++
++  const { data: conexoes, error: conexoesError } = await supabase.rpc(
++    'listar_conexoes_google_meet_para_verificacao',
++  );
++
++  if (conexoesError) {
++    console.error('Erro ao listar conexões do Google Meet', conexoesError);
++    return jsonResponse({ error: conexoesError.message }, 500);
++  }
++
++  const resultado: Record<string, { reunioes_encontradas: number; erro?: string }> = {};
++
++  for (const conexao of (conexoes ?? []) as ConexaoParaVerificar[]) {
++    try {
++      const encontradas = await verificarConexao(supabase, conexao);
++      resultado[conexao.google_email] = { reunioes_encontradas: encontradas };
++    } catch (err) {
++      console.error(`Erro ao verificar conexão ${conexao.google_email}`, err);
++      resultado[conexao.google_email] = {
++        reunioes_encontradas: 0,
++        erro: String(err instanceof Error ? err.message : err),
++      };
++    }
++  }
++
++  return jsonResponse({ ok: true, resultado });
++});
++
++// deno-lint-ignore no-explicit-any
++async function verificarConexao(supabase: any, conexao: ConexaoParaVerificar): Promise<number> {
++  const tokens = await renovarAccessToken(conexao.refresh_token);
++
++  const desde = conexao.ultima_verificacao
++    ? new Date(conexao.ultima_verificacao)
++    : new Date(Date.now() - JANELA_PRIMEIRA_VERIFICACAO_HORAS * 60 * 60 * 1000);
++
++  const conferencias = await listarConferenciasRecentes(tokens.access_token, desde);
++  let encontradas = 0;
++
++  for (const conferencia of conferencias) {
++    if (!conferencia.endTime) continue; // reunião ainda em andamento
++
++    const transcricao = await obterTranscricaoDaReuniao(tokens.access_token, conferencia.name);
++    if (!transcricao) continue; // sem transcrição pronta ainda (ou reunião sem transcrição habilitada)
++
++    const { error: insertError } = await supabase
++      .from('reunioes_meet_detectadas')
++      .upsert(
++        {
++          conexao_id: conexao.id,
++          user_id: conexao.user_id,
++          conference_record_name: conferencia.name,
++          titulo: `Reunião do Meet — ${new Date(conferencia.startTime ?? Date.now()).toLocaleDateString('pt-BR')}`,
++          iniciado_em: conferencia.startTime ?? null,
++          finalizado_em: conferencia.endTime ?? null,
++          transcricao,
++          status: 'pendente',
++        },
++        { onConflict: 'conference_record_name', ignoreDuplicates: true },
++      );
++
++    if (insertError) {
++      console.error('Erro ao gravar reunião detectada', insertError);
++      continue;
++    }
++
++    encontradas++;
++  }
++
++  await supabase.rpc('marcar_conexao_google_meet_verificada', { p_id: conexao.id });
++
++  return encontradas;
++}
+diff --git a/supabase/functions/verificar-reunioes-meet/meetApi.ts b/supabase/functions/verificar-reunioes-meet/meetApi.ts
+new file mode 100644
+index 0000000..759fbfb
+--- /dev/null
++++ b/supabase/functions/verificar-reunioes-meet/meetApi.ts
+@@ -0,0 +1,154 @@
++const MEET_API_BASE = 'https://meet.googleapis.com/v2';
++
++export type ConferenceRecord = {
++  name: string; // ex: "conferenceRecords/abc123"
++  startTime?: string;
++  endTime?: string;
++};
++
++type Transcript = {
++  name: string; // ex: "conferenceRecords/abc123/transcripts/xyz"
++  state: 'STARTED' | 'ENDED' | 'FILE_GENERATED' | string;
++};
++
++type TranscriptEntry = {
++  name: string;
++  participant?: string; // resource name do participante
++  text: string;
++  startTime?: string;
++};
++
++type Participant = {
++  name: string; // ex: "conferenceRecords/abc123/participants/456"
++  signedinUser?: { displayName?: string };
++  anonymousUser?: { displayName?: string };
++  phoneUser?: { displayName?: string };
++};
++
++async function chamarMeetApi<T>(accessToken: string, path: string): Promise<T> {
++  const resposta = await fetch(`${MEET_API_BASE}/${path}`, {
++    headers: { Authorization: `Bearer ${accessToken}` },
++  });
++
++  if (!resposta.ok) {
++    const texto = await resposta.text();
++    throw new Error(`Meet API ${path} respondeu ${resposta.status}: ${texto}`);
++  }
++
++  return resposta.json();
++}
++
++export async function listarConferenciasRecentes(
++  accessToken: string,
++  desde: Date,
++): Promise<ConferenceRecord[]> {
++  const registros: ConferenceRecord[] = [];
++  let pageToken: string | undefined;
++
++  do {
++    const query = new URLSearchParams({ pageSize: '50' });
++    if (pageToken) query.set('pageToken', pageToken);
++
++    const dados: { conferenceRecords?: ConferenceRecord[]; nextPageToken?: string } = await chamarMeetApi(
++      accessToken,
++      `conferenceRecords?${query.toString()}`,
++    );
++
++    for (const registro of dados.conferenceRecords ?? []) {
++      // A API já devolve em ordem decrescente de início — para assim
++      // que achar algo mais antigo que o corte, sem paginar o histórico
++      // inteiro a cada verificação.
++      if (registro.endTime && new Date(registro.endTime) <= desde) {
++        return registros;
++      }
++      registros.push(registro);
++    }
++
++    pageToken = dados.nextPageToken;
++  } while (pageToken);
++
++  return registros;
++}
++
++async function listarParticipantes(accessToken: string, conferenceRecordName: string): Promise<Map<string, string>> {
++  const mapa = new Map<string, string>();
++  let pageToken: string | undefined;
++
++  do {
++    const query = new URLSearchParams({ pageSize: '100' });
++    if (pageToken) query.set('pageToken', pageToken);
++
++    const dados: { participants?: Participant[]; nextPageToken?: string } = await chamarMeetApi(
++      accessToken,
++      `${conferenceRecordName}/participants?${query.toString()}`,
++    );
++
++    for (const participante of dados.participants ?? []) {
++      const nome =
++        participante.signedinUser?.displayName ??
++        participante.anonymousUser?.displayName ??
++        participante.phoneUser?.displayName ??
++        'Participante';
++      mapa.set(participante.name, nome);
++    }
++
++    pageToken = dados.nextPageToken;
++  } while (pageToken);
++
++  return mapa;
++}
++
++async function buscarTranscricaoFinalizada(
++  accessToken: string,
++  conferenceRecordName: string,
++): Promise<Transcript | null> {
++  const dados: { transcripts?: Transcript[] } = await chamarMeetApi(accessToken, `${conferenceRecordName}/transcripts`);
++  return (dados.transcripts ?? []).find((t) => t.state === 'ENDED' || t.state === 'FILE_GENERATED') ?? null;
++}
++
++async function listarEntradasTranscricao(accessToken: string, transcriptName: string): Promise<TranscriptEntry[]> {
++  const entradas: TranscriptEntry[] = [];
++  let pageToken: string | undefined;
++
++  do {
++    const query = new URLSearchParams({ pageSize: '100' });
++    if (pageToken) query.set('pageToken', pageToken);
++
++    const dados: { transcriptEntries?: TranscriptEntry[]; nextPageToken?: string } = await chamarMeetApi(
++      accessToken,
++      `${transcriptName}/entries?${query.toString()}`,
++    );
++
++    entradas.push(...(dados.transcriptEntries ?? []));
++    pageToken = dados.nextPageToken;
++  } while (pageToken);
++
++  entradas.sort((a, b) => (a.startTime ?? '').localeCompare(b.startTime ?? ''));
++  return entradas;
++}
++
++// Monta a transcrição em texto corrido ("Nome: fala"), no mesmo
++// formato que o parser de .vtt/.srt já produz — assim a Edge Function
++// gerar-ata (e o prompt da IA) não precisam saber de onde a
++// transcrição veio.
++export async function obterTranscricaoDaReuniao(
++  accessToken: string,
++  conferenceRecordName: string,
++): Promise<string | null> {
++  const transcript = await buscarTranscricaoFinalizada(accessToken, conferenceRecordName);
++  if (!transcript) return null;
++
++  const [entradas, participantes] = await Promise.all([
++    listarEntradasTranscricao(accessToken, transcript.name),
++    listarParticipantes(accessToken, conferenceRecordName),
++  ]);
++
++  if (entradas.length === 0) return null;
++
++  return entradas
++    .map((entrada) => {
++      const nome = entrada.participant ? participantes.get(entrada.participant) ?? 'Participante' : 'Participante';
++      return `${nome}: ${entrada.text}`;
++    })
++    .join('\n');
++}
+diff --git a/supabase/migrations/0002_captura_google_meet.sql b/supabase/migrations/0002_captura_google_meet.sql
+new file mode 100644
+index 0000000..aca4036
+--- /dev/null
++++ b/supabase/migrations/0002_captura_google_meet.sql
+@@ -0,0 +1,169 @@
++-- Captura automática de reuniões do Google Meet (v2 do roadmap).
++--
++-- Cada consultor conecta a própria conta Google (OAuth, escopo
++-- meetings.space.readonly) uma vez. O refresh token fica criptografado
++-- no banco (pgcrypto + Supabase Vault, mesmo padrão de credencial
++-- sensível usado em outras partes do projeto) — nunca em texto puro,
++-- nunca lido pelo client.
++--
++-- Uma Edge Function agendada (verificar-reunioes-meet, configurada via
++-- cron fora desta migration — ver README) roda periodicamente, usa o
++-- token de cada conexão pra listar reuniões novas com transcrição
++-- pronta na API do Meet, e grava o resultado em
++-- reunioes_meet_detectadas — sem nenhuma ata ser criada automaticamente
++-- (fica pendente até o consultor revisar e confirmar).
++--
++-- Pré-requisito: extensão supabase_vault habilitada e um secret
++-- "google_meet_oauth_key" criado nela (ver README) — usada como chave
++-- simétrica de criptografia do refresh token.
++
++create extension if not exists pgcrypto;
++
++create table if not exists public.conexoes_google_meet (
++  id uuid primary key default gen_random_uuid(),
++  user_id uuid not null references auth.users(id) on delete cascade,
++  google_email text not null,
++  refresh_token_criptografado bytea not null,
++  ultima_verificacao timestamptz,
++  created_at timestamptz not null default now(),
++  updated_at timestamptz not null default now(),
++  unique (user_id, google_email)
++);
++
++alter table public.conexoes_google_meet enable row level security;
++
++create policy "conexoes_google_meet_select_own"
++  on public.conexoes_google_meet for select
++  to authenticated
++  using (user_id = auth.uid());
++
++create policy "conexoes_google_meet_delete_own"
++  on public.conexoes_google_meet for delete
++  to authenticated
++  using (user_id = auth.uid());
++
++create trigger conexoes_google_meet_set_updated_at
++  before update on public.conexoes_google_meet
++  for each row execute function public.set_updated_at();
++
++-- Grava (ou atualiza) a conexão do usuário autenticado, criptografando
++-- o refresh token antes. Chamada só pela Edge Function
++-- google-meet-conectar, logo após trocar o "code" do OAuth pelos
++-- tokens — nunca direto pelo client.
++create or replace function public.salvar_conexao_google_meet(
++  p_google_email text,
++  p_refresh_token text
++)
++returns uuid
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_chave text;
++  v_id uuid;
++begin
++  select decrypted_secret into v_chave from vault.decrypted_secrets where name = 'google_meet_oauth_key';
++  if v_chave is null then
++    raise exception 'Secret "google_meet_oauth_key" não configurada no Supabase Vault.';
++  end if;
++
++  insert into public.conexoes_google_meet (user_id, google_email, refresh_token_criptografado)
++  values (auth.uid(), p_google_email, pgp_sym_encrypt(p_refresh_token, v_chave))
++  on conflict (user_id, google_email)
++  do update set refresh_token_criptografado = excluded.refresh_token_criptografado
++  returning id into v_id;
++
++  return v_id;
++end;
++$$;
++
++revoke all on function public.salvar_conexao_google_meet(text, text) from public;
++grant execute on function public.salvar_conexao_google_meet(text, text) to authenticated;
++
++-- Usada só pela Edge Function agendada verificar-reunioes-meet
++-- (chamada com a service_role key, sem usuário logado): devolve todas
++-- as conexões já com o token descriptografado, pra ela consultar a API
++-- do Meet em nome de cada consultor.
++create or replace function public.listar_conexoes_google_meet_para_verificacao()
++returns table (
++  id uuid,
++  user_id uuid,
++  google_email text,
++  refresh_token text,
++  ultima_verificacao timestamptz
++)
++language plpgsql
++security definer
++set search_path = public
++as $$
++declare
++  v_chave text;
++begin
++  select decrypted_secret into v_chave from vault.decrypted_secrets where name = 'google_meet_oauth_key';
++  if v_chave is null then
++    raise exception 'Secret "google_meet_oauth_key" não configurada no Supabase Vault.';
++  end if;
++
++  return query
++    select
++      c.id,
++      c.user_id,
++      c.google_email,
++      pgp_sym_decrypt(c.refresh_token_criptografado, v_chave),
++      c.ultima_verificacao
++    from public.conexoes_google_meet c;
++end;
++$$;
++
++revoke all on function public.listar_conexoes_google_meet_para_verificacao() from public;
++grant execute on function public.listar_conexoes_google_meet_para_verificacao() to service_role;
++
++create or replace function public.marcar_conexao_google_meet_verificada(p_id uuid)
++returns void
++language sql
++security definer
++set search_path = public
++as $$
++  update public.conexoes_google_meet set ultima_verificacao = now() where id = p_id;
++$$;
++
++revoke all on function public.marcar_conexao_google_meet_verificada(uuid) from public;
++grant execute on function public.marcar_conexao_google_meet_verificada(uuid) to service_role;
++
++-- ============================================================
++-- Reuniões que a verificação periódica encontrou, aguardando revisão
++-- humana antes de virarem ata de verdade.
++-- ============================================================
++create table if not exists public.reunioes_meet_detectadas (
++  id uuid primary key default gen_random_uuid(),
++  conexao_id uuid not null references public.conexoes_google_meet(id) on delete cascade,
++  user_id uuid not null references auth.users(id) on delete cascade,
++  -- resource name do conferenceRecord na API do Meet (ex:
++  -- "conferenceRecords/abc123") — único, evita gravar a mesma reunião
++  -- duas vezes em verificações consecutivas.
++  conference_record_name text not null unique,
++  titulo text,
++  iniciado_em timestamptz,
++  finalizado_em timestamptz,
++  transcricao text not null default '',
++  status text not null default 'pendente' check (status in ('pendente', 'ignorada', 'ata_criada')),
++  ata_id uuid references public.atas_reuniao(id) on delete set null,
++  created_at timestamptz not null default now()
++);
++
++create index if not exists reunioes_meet_detectadas_user_id_idx on public.reunioes_meet_detectadas(user_id);
++create index if not exists reunioes_meet_detectadas_status_idx on public.reunioes_meet_detectadas(status);
++
++alter table public.reunioes_meet_detectadas enable row level security;
++
++create policy "reunioes_meet_detectadas_select_own"
++  on public.reunioes_meet_detectadas for select
++  to authenticated
++  using (user_id = auth.uid());
++
++create policy "reunioes_meet_detectadas_update_own"
++  on public.reunioes_meet_detectadas for update
++  to authenticated
++  using (user_id = auth.uid())
++  with check (user_id = auth.uid());
+-- 
+2.43.0
+

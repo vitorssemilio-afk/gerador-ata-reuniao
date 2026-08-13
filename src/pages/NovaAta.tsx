@@ -1,15 +1,23 @@
-import { useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { lerArquivoTranscricao, normalizarTranscricao } from '../lib/parseTranscricao';
 import { supabase } from '../lib/supabaseClient';
 
 const EXTENSOES_ACEITAS = '.txt,.vtt,.srt';
 
+function horaLocal(iso: string | null): string {
+  if (!iso) return '';
+  return new Date(iso).toTimeString().slice(0, 5);
+}
+
 export function NovaAta() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const reuniaoDetectadaId = searchParams.get('reuniao_detectada_id');
 
   const [cliente, setCliente] = useState('');
   const [assunto, setAssunto] = useState('');
@@ -21,6 +29,29 @@ export function NovaAta() {
   const [nomeArquivo, setNomeArquivo] = useState<string | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [carregandoDetectada, setCarregandoDetectada] = useState(Boolean(reuniaoDetectadaId));
+
+  useEffect(() => {
+    if (!reuniaoDetectadaId) return;
+
+    supabase
+      .from('reunioes_meet_detectadas')
+      .select('*')
+      .eq('id', reuniaoDetectadaId)
+      .single()
+      .then(({ data, error: fetchError }) => {
+        if (fetchError || !data) {
+          setError(fetchError?.message ?? 'Reunião detectada não encontrada.');
+        } else {
+          setAssunto(data.titulo ?? '');
+          if (data.iniciado_em) setDataReuniao(new Date(data.iniciado_em).toISOString().slice(0, 10));
+          setHoraInicio(horaLocal(data.iniciado_em));
+          setHoraFim(horaLocal(data.finalizado_em));
+          setTranscricao(data.transcricao);
+        }
+        setCarregandoDetectada(false);
+      });
+  }, [reuniaoDetectadaId]);
 
   async function handleArquivo(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -84,6 +115,13 @@ export function NovaAta() {
       return;
     }
 
+    if (reuniaoDetectadaId) {
+      await supabase
+        .from('reunioes_meet_detectadas')
+        .update({ status: 'ata_criada', ata_id: ata.id })
+        .eq('id', reuniaoDetectadaId);
+    }
+
     await supabase.functions.invoke('gerar-ata', {
       body: { ata_id: ata.id },
     });
@@ -96,6 +134,13 @@ export function NovaAta() {
       <div className="page-header">
         <h1>Nova ata de reunião</h1>
       </div>
+
+      {reuniaoDetectadaId && (
+        <p className="form-info">
+          Transcrição pré-carregada de uma reunião detectada automaticamente no Google Meet. Só
+          falta preencher cliente/projeto e assunto.
+        </p>
+      )}
 
       <form className="card form-card" onSubmit={handleSubmit}>
         {error && <p className="form-error">{error}</p>}
@@ -136,21 +181,23 @@ export function NovaAta() {
           </label>
         </div>
 
-        <label className="field field-full">
-          <span>Transcrição (.txt, .vtt ou .srt exportado do Zoom/Meet)</span>
-          <input ref={fileInputRef} type="file" accept={EXTENSOES_ACEITAS} onChange={handleArquivo} />
-          {nomeArquivo && (
-            <span className="field-hint">
-              Arquivo carregado: {nomeArquivo}{' '}
-              <button type="button" className="link-button" onClick={limparArquivo}>
-                remover
-              </button>
-            </span>
-          )}
-        </label>
+        {!reuniaoDetectadaId && (
+          <label className="field field-full">
+            <span>Transcrição (.txt, .vtt ou .srt exportado do Zoom/Meet)</span>
+            <input ref={fileInputRef} type="file" accept={EXTENSOES_ACEITAS} onChange={handleArquivo} />
+            {nomeArquivo && (
+              <span className="field-hint">
+                Arquivo carregado: {nomeArquivo}{' '}
+                <button type="button" className="link-button" onClick={limparArquivo}>
+                  remover
+                </button>
+              </span>
+            )}
+          </label>
+        )}
 
         <label className="field field-full">
-          <span>Ou cole o texto da transcrição aqui</span>
+          <span>{reuniaoDetectadaId ? 'Transcrição (capturada automaticamente — pode editar)' : 'Ou cole o texto da transcrição aqui'}</span>
           <textarea
             rows={10}
             value={transcricao}
@@ -159,10 +206,11 @@ export function NovaAta() {
               setNomeArquivo(null);
             }}
             placeholder="Cole aqui a transcrição da reunião…"
+            disabled={carregandoDetectada}
           />
         </label>
 
-        <button type="submit" className="btn btn-primary btn-auto" disabled={enviando}>
+        <button type="submit" className="btn btn-primary btn-auto" disabled={enviando || carregandoDetectada}>
           {enviando ? 'Gerando ata…' : 'Gerar ata com IA'}
         </button>
       </form>
