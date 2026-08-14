@@ -1,6 +1,7 @@
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { AlertaConexaoExpirada } from './AlertaConexaoExpirada';
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   return `topbar-nav-link${isActive ? ' active' : ''}`;
@@ -67,6 +68,7 @@ export function Layout() {
           </button>
         </div>
       </header>
+      <AlertaConexaoExpirada />
       <main className="app-main">
         <Outlet />
       </main>

@@ -36,11 +36,15 @@ export type AtaReuniao = {
   updated_at: string;
 };
 
+export type ConexaoGoogleMeetStatus = 'ativa' | 'erro';
+
 export type ConexaoGoogleMeet = {
   id: string;
   user_id: string;
   google_email: string;
   ultima_verificacao: string | null;
+  status: ConexaoGoogleMeetStatus;
+  ultimo_erro: string | null;
   created_at: string;
   updated_at: string;
 };

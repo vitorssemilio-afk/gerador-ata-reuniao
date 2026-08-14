@@ -74,7 +74,17 @@ Deno.serve(async (req: Request) => {
 
 // deno-lint-ignore no-explicit-any
 async function verificarConexao(supabase: any, conexao: ConexaoParaVerificar): Promise<number> {
-  const tokens = await renovarAccessToken(conexao.refresh_token);
+  let tokens;
+  try {
+    tokens = await renovarAccessToken(conexao.refresh_token);
+  } catch (err) {
+    // Refresh token inválido/revogado (usuário desconectou o acesso pelo
+    // Google, ou o token expirou) — marca a conexão como "erro" pra ela
+    // aparecer com aviso no app, pedindo pra reconectar.
+    const mensagem = String(err instanceof Error ? err.message : err);
+    await supabase.rpc('marcar_conexao_google_meet_com_erro', { p_id: conexao.id, p_erro: mensagem });
+    throw err;
+  }
 
   const desde = conexao.ultima_verificacao
     ? new Date(conexao.ultima_verificacao)

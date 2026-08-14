@@ -70,6 +70,7 @@ export function Integracoes() {
                 <tr>
                   <th>Conta Google</th>
                   <th>Última verificação</th>
+                  <th>Status</th>
                   <th />
                 </tr>
               </thead>
@@ -78,7 +79,21 @@ export function Integracoes() {
                   <tr key={conexao.id}>
                     <td>{conexao.google_email}</td>
                     <td>{formatarDataHora(conexao.ultima_verificacao)}</td>
+                    <td>
+                      {conexao.status === 'erro' ? (
+                        <span className="badge badge-erro" title={conexao.ultimo_erro ?? undefined}>
+                          Precisa reconectar
+                        </span>
+                      ) : (
+                        <span className="badge badge-ok">Conectada</span>
+                      )}
+                    </td>
                     <td className="table-actions">
+                      {conexao.status === 'erro' && (
+                        <button type="button" className="link-button" onClick={iniciarConexaoGoogleMeet}>
+                          Reconectar
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="link-button"
