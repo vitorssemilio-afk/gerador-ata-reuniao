@@ -8,6 +8,21 @@ import { googleDriveConfigurado, salvarAtaNoDrive } from '../lib/googleDrive';
 import { supabase } from '../lib/supabaseClient';
 import type { AtaAcao, AtaReuniao, AtaTopico } from '../types/database';
 
+// Mesmos 7 tipos de reunião usados no Mapeador de Funil IA — só pra ajudar
+// o vínculo automático por lá quando o reuniao_id exato não for informado
+// (ver docs/integracao-mapeador.md). Opcional: sem isso, a ata ainda é
+// enviada, só fica "aguardando vínculo manual" do lado do Mapeador.
+const TIPOS_REUNIAO_MAPEADOR: { valor: string; label: string }[] = [
+  { valor: '', label: 'Não informar' },
+  { valor: 'kickoff', label: 'Kickoff' },
+  { valor: 'treinamento', label: 'Treinamento' },
+  { valor: 'checkin_1', label: 'Check-in 1' },
+  { valor: 'checkin_2', label: 'Check-in 2' },
+  { valor: 'tira_duvidas', label: 'Tira-dúvidas' },
+  { valor: 'reuniao_final', label: 'Reunião final / Entrega' },
+  { valor: 'extraordinaria', label: 'Reunião extraordinária' },
+];
+
 function atualizarItem<T>(lista: T[], index: number, item: T): T[] {
   return lista.map((atual, i) => (i === index ? item : atual));
 }
@@ -29,6 +44,7 @@ export function AtaDetalhe() {
   const [salvandoDrive, setSalvandoDrive] = useState(false);
   const [mensagem, setMensagem] = useState<string | null>(null);
   const [copiado, setCopiado] = useState(false);
+  const [enviandoMapeador, setEnviandoMapeador] = useState(false);
 
   const carregar = useCallback(async () => {
     if (!id) return;
@@ -112,6 +128,10 @@ export function AtaDetalhe() {
         proxima_reuniao: ata.proxima_reuniao,
         texto_whatsapp: textoWhatsapp,
         status: 'concluida',
+        mapeador_cliente_id: ata.mapeador_cliente_id,
+        mapeador_implementacao_id: ata.mapeador_implementacao_id,
+        mapeador_reuniao_id: ata.mapeador_reuniao_id,
+        mapeador_tipo_reuniao: ata.mapeador_tipo_reuniao,
       })
       .eq('id', ata.id)
       .select()
@@ -124,8 +144,20 @@ export function AtaDetalhe() {
     }
 
     setAta(data);
-    setMensagem('Ata salva.');
     setSalvando(false);
+
+    setEnviandoMapeador(true);
+    const { data: envioData, error: envioError } = await supabase.functions.invoke('enviar-ata-mapeador', {
+      body: { ata_id: data.id },
+    });
+    setEnviandoMapeador(false);
+
+    if (envioError) {
+      setMensagem('Ata salva. Não foi possível enviar pro Mapeador agora — tente de novo mais tarde.');
+    } else {
+      setMensagem(`Ata salva. ${envioData?.mensagem ?? ''}`);
+      await carregar();
+    }
   }
 
   async function baixarWord() {
@@ -247,6 +279,53 @@ export function AtaDetalhe() {
               <span>Pauta</span>
               <textarea rows={2} value={ata.pauta} onChange={(e) => atualizarCampo('pauta', e.target.value)} />
             </label>
+          </div>
+
+          <div className="card form-card">
+            <h2>Integração com o Mapeador de Funil IA</h2>
+            <p className="field-hint">
+              Opcional, mas recomendado — sem isso a ata chega lá como "aguardando vínculo" e precisa ser ligada
+              manualmente. Cole aqui o id do cliente e/ou da implementação (aparecem na URL quando você abre o
+              cliente/implementação no Mapeador).
+            </p>
+            <div className="form-grid">
+              <label className="field">
+                <span>Cliente (id no Mapeador)</span>
+                <input
+                  value={ata.mapeador_cliente_id ?? ''}
+                  onChange={(e) => atualizarCampo('mapeador_cliente_id', e.target.value.trim() || null)}
+                  placeholder="uuid do cliente"
+                />
+              </label>
+              <label className="field">
+                <span>Implementação (id no Mapeador)</span>
+                <input
+                  value={ata.mapeador_implementacao_id ?? ''}
+                  onChange={(e) => atualizarCampo('mapeador_implementacao_id', e.target.value.trim() || null)}
+                  placeholder="uuid da implementação"
+                />
+              </label>
+              <label className="field">
+                <span>Tipo de reunião (no Mapeador)</span>
+                <select
+                  value={ata.mapeador_tipo_reuniao ?? ''}
+                  onChange={(e) => atualizarCampo('mapeador_tipo_reuniao', e.target.value || null)}
+                >
+                  {TIPOS_REUNIAO_MAPEADOR.map((t) => (
+                    <option key={t.valor} value={t.valor}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+                <span className="field-hint">Ajuda o Mapeador a achar a reunião certa quando ele souber a data aproximada.</span>
+              </label>
+            </div>
+            {ata.enviado_mapeador_status && (
+              <p className={ata.enviado_mapeador_status === 'falhou' ? 'form-error' : 'form-info'}>
+                Mapeador: {ata.enviado_mapeador_mensagem ?? ata.enviado_mapeador_status}
+                {ata.enviado_mapeador_em ? ` (${new Date(ata.enviado_mapeador_em).toLocaleString('pt-BR')})` : ''}
+              </p>
+            )}
           </div>
 
           <div className="card form-card">
@@ -414,8 +493,8 @@ export function AtaDetalhe() {
           <div className="card form-card">
             <h2>Salvar</h2>
             <div className="page-header-actions">
-              <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando}>
-                {salvando ? 'Salvando…' : 'Salvar revisão'}
+              <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando || enviandoMapeador}>
+                {salvando ? 'Salvando…' : enviandoMapeador ? 'Enviando pro Mapeador…' : 'Salvar revisão'}
               </button>
               <button type="button" className="btn btn-secondary" onClick={baixarWord}>
                 Baixar Word (.docx)

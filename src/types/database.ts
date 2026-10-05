@@ -11,6 +11,8 @@ export type AtaAcao = {
   prazo: string | null;
 };
 
+export type EnviadoMapeadorStatus = 'enviado' | 'vinculado' | 'requer_revisao' | 'falhou';
+
 export type AtaReuniao = {
   id: string;
   user_id: string;
@@ -32,6 +34,16 @@ export type AtaReuniao = {
   texto_whatsapp: string;
   drive_file_id: string | null;
   drive_file_link: string | null;
+  // Integração com o Mapeador de Funil IA — ver migration 0004. Os 3 ids
+  // são preenchidos manualmente (copiados da URL do Mapeador); sem eles a
+  // ata ainda é enviada, só fica "aguardando vínculo" do lado de lá.
+  mapeador_cliente_id: string | null;
+  mapeador_implementacao_id: string | null;
+  mapeador_reuniao_id: string | null;
+  mapeador_tipo_reuniao: string | null;
+  enviado_mapeador_em: string | null;
+  enviado_mapeador_status: EnviadoMapeadorStatus | null;
+  enviado_mapeador_mensagem: string | null;
   created_at: string;
   updated_at: string;
 };
