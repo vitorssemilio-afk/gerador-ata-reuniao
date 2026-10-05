@@ -84,6 +84,31 @@ supabase secrets set ANTHROPIC_MODEL=claude-sonnet-5
 função usa o JWT do usuário autenticado (repassado pelo front via `supabase.functions.invoke`)
 para ler/gravar os dados, então o RLS garante que só usuários autenticados acessam os dados.
 
+## Integração com o Mapeador de Funil IA
+
+Quando a ata é salva (sempre que se clica em "Salvar revisão", já que não existe um estado
+intermediário de rascunho depois da IA gerar), ela é enviada automaticamente pro Mapeador de Funil
+IA, vinculada ao cliente/implementação/reunião de lá — nunca só pelo nome do cliente. Os campos
+"Cliente (id no Mapeador)" e "Implementação (id no Mapeador)" na tela de revisão da ata (`/:id`)
+são opcionais, mas recomendados: sem eles, a ata chega lá como "aguardando vínculo manual".
+
+Esses ids aparecem na própria URL do Mapeador — abra o cliente ou a implementação lá e copie o
+UUID do final do endereço (ex: `.../clientes/<id>` ou `.../implementacoes/<id>`).
+
+Isso acontece via uma segunda Edge Function, `enviar-ata-mapeador`, que guarda o segredo
+compartilhado com o Mapeador — o segredo nunca passa pelo frontend.
+
+```bash
+supabase functions deploy enviar-ata-mapeador
+supabase secrets set MAPEADOR_WEBHOOK_URL=https://SEU_PROJETO_MAPEADOR.supabase.co/functions/v1/webhook-atas
+supabase secrets set MAPEADOR_WEBHOOK_SECRET=o-mesmo-segredo-configurado-la-no-mapeador
+```
+
+O resultado do envio (enviado/vinculado/aguardando vínculo/falhou) fica salvo na própria ata
+(`enviado_mapeador_status`/`enviado_mapeador_mensagem`) e é mostrado na tela de revisão. Se o envio
+falhar (Mapeador fora do ar, rede, etc.), a ata continua salva normalmente aqui — a integração
+nunca bloqueia o uso do app.
+
 ## Google Drive (opcional)
 
 O upload usa [Google Identity Services](https://developers.google.com/identity/oauth2/web/guides/overview)
