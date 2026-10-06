@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { ClienteSelect } from '../components/ClienteSelect';
 import { useAuth } from '../contexts/AuthContext';
 import { lerArquivoTranscricao, normalizarTranscricao } from '../lib/parseTranscricao';
 import { supabase } from '../lib/supabaseClient';
@@ -18,8 +19,9 @@ export function NovaAta() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reuniaoDetectadaId = searchParams.get('reuniao_detectada_id');
+  const clienteNomePreSelecionado = searchParams.get('cliente_nome');
 
-  const [cliente, setCliente] = useState('');
+  const [cliente, setCliente] = useState(clienteNomePreSelecionado ?? '');
   const [assunto, setAssunto] = useState('');
   const [dataReuniao, setDataReuniao] = useState(() => new Date().toISOString().slice(0, 10));
   const [horaInicio, setHoraInicio] = useState('');
@@ -88,6 +90,16 @@ export function NovaAta() {
 
     setEnviando(true);
 
+    const { data: clienteCadastrado, error: clienteError } = await supabase.rpc('obter_ou_criar_cliente', {
+      p_nome: cliente,
+    });
+
+    if (clienteError || !clienteCadastrado) {
+      setError(clienteError?.message ?? 'Erro ao vincular o cliente.');
+      setEnviando(false);
+      return;
+    }
+
     const participantesLista = participantes
       .split(',')
       .map((p) => p.trim())
@@ -97,7 +109,8 @@ export function NovaAta() {
       .from('atas_reuniao')
       .insert({
         user_id: user.id,
-        cliente: cliente.trim(),
+        cliente: clienteCadastrado.nome,
+        cliente_id: clienteCadastrado.id,
         assunto: assunto.trim(),
         data_reuniao: dataReuniao,
         hora_inicio: horaInicio || null,
@@ -132,7 +145,7 @@ export function NovaAta() {
   return (
     <div className="page">
       <div className="page-header">
-        <h1>Nova ata de reunião</h1>
+        <h1>{clienteNomePreSelecionado ? `Nova ata — ${clienteNomePreSelecionado}` : 'Nova ata de reunião'}</h1>
       </div>
 
       {reuniaoDetectadaId && (
@@ -146,10 +159,13 @@ export function NovaAta() {
         {error && <p className="form-error">{error}</p>}
 
         <div className="form-grid">
-          <label className="field">
-            <span>Cliente / Projeto</span>
-            <input value={cliente} onChange={(e) => setCliente(e.target.value)} placeholder="Ex: Studio Nova" required />
-          </label>
+          <ClienteSelect
+            label="Cliente / Projeto"
+            value={cliente}
+            onChange={(nome) => setCliente(nome)}
+            placeholder="Ex: Studio Nova"
+            required
+          />
           <label className="field">
             <span>Assunto da reunião</span>
             <input

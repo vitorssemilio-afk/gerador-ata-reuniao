@@ -5,6 +5,8 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AtaDetalhe } from './pages/AtaDetalhe';
 import { Atas } from './pages/Atas';
+import { ClienteDetalhe } from './pages/ClienteDetalhe';
+import { Clientes } from './pages/Clientes';
 import { ConectarGoogleCallback } from './pages/ConectarGoogleCallback';
 import { Integracoes } from './pages/Integracoes';
 import { Login } from './pages/Login';
@@ -25,7 +27,9 @@ function App() {
                 </ProtectedRoute>
               }
             >
-              <Route path="/" element={<Atas />} />
+              <Route path="/" element={<Clientes />} />
+              <Route path="/atas" element={<Atas />} />
+              <Route path="/clientes/:id" element={<ClienteDetalhe />} />
               <Route path="/nova" element={<NovaAta />} />
               <Route path="/integracoes" element={<Integracoes />} />
               <Route path="/reunioes-detectadas" element={<ReunioesDetectadas />} />

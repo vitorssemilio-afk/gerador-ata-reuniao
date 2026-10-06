@@ -13,10 +13,26 @@ export type AtaAcao = {
 
 export type EnviadoMapeadorStatus = 'enviado' | 'vinculado' | 'requer_revisao' | 'falhou';
 
+export type Cliente = {
+  id: string;
+  nome: string;
+  nome_normalizado: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ClienteResumo = {
+  id: string;
+  nome: string;
+  qtd_atas: number;
+  ultima_reuniao: string | null;
+};
+
 export type AtaReuniao = {
   id: string;
   user_id: string;
   cliente: string;
+  cliente_id: string | null;
   assunto: string;
   data_reuniao: string;
   hora_inicio: string | null;
@@ -102,12 +118,27 @@ export type Database = {
         Update: Partial<ReuniaoMeetDetectada>;
         Relationships: [];
       };
+      clientes: {
+        Row: Cliente;
+        Insert: Partial<Cliente> & Pick<Cliente, 'nome'>;
+        Update: Partial<Cliente>;
+        Relationships: [];
+      };
     };
-    Views: Record<string, never>;
+    Views: {
+      clientes_resumo: {
+        Row: ClienteResumo;
+        Relationships: [];
+      };
+    };
     Functions: {
       salvar_conexao_google_meet: {
         Args: { p_google_email: string; p_refresh_token: string };
         Returns: string;
+      };
+      obter_ou_criar_cliente: {
+        Args: { p_nome: string };
+        Returns: Cliente;
       };
     };
     Enums: Record<string, never>;

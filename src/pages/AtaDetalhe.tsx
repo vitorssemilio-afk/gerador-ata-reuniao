@@ -1,27 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AtaPreviewDocumento } from '../components/AtaPreviewDocumento';
 import { AtaStatusBadge } from '../components/AtaStatusBadge';
+import { ClienteSelect } from '../components/ClienteSelect';
 import { baixarAtaDocx, gerarAtaDocxBlob, nomeArquivoAtaDocx } from '../lib/exportAtaDocx';
 import { copiarParaAreaDeTransferencia, gerarTextoWhatsapp } from '../lib/exportAtaWhatsapp';
 import { googleDriveConfigurado, salvarAtaNoDrive } from '../lib/googleDrive';
 import { supabase } from '../lib/supabaseClient';
+import { TIPOS_REUNIAO_MAPEADOR } from '../lib/tiposReuniao';
 import type { AtaAcao, AtaReuniao, AtaTopico } from '../types/database';
-
-// Mesmos 7 tipos de reunião usados no Mapeador de Funil IA — só pra ajudar
-// o vínculo automático por lá quando o reuniao_id exato não for informado
-// (ver docs/integracao-mapeador.md). Opcional: sem isso, a ata ainda é
-// enviada, só fica "aguardando vínculo manual" do lado do Mapeador.
-const TIPOS_REUNIAO_MAPEADOR: { valor: string; label: string }[] = [
-  { valor: '', label: 'Não informar' },
-  { valor: 'kickoff', label: 'Kickoff' },
-  { valor: 'treinamento', label: 'Treinamento' },
-  { valor: 'checkin_1', label: 'Check-in 1' },
-  { valor: 'checkin_2', label: 'Check-in 2' },
-  { valor: 'tira_duvidas', label: 'Tira-dúvidas' },
-  { valor: 'reuniao_final', label: 'Reunião final / Entrega' },
-  { valor: 'extraordinaria', label: 'Reunião extraordinária' },
-];
 
 function atualizarItem<T>(lista: T[], index: number, item: T): T[] {
   return lista.map((atual, i) => (i === index ? item : atual));
@@ -45,6 +32,7 @@ export function AtaDetalhe() {
   const [mensagem, setMensagem] = useState<string | null>(null);
   const [copiado, setCopiado] = useState(false);
   const [enviandoMapeador, setEnviandoMapeador] = useState(false);
+  const [clienteNovo, setClienteNovo] = useState(false);
 
   const carregar = useCallback(async () => {
     if (!id) return;
@@ -59,6 +47,7 @@ export function AtaDetalhe() {
 
     setAta(data);
     setTextoWhatsapp(data.texto_whatsapp || gerarTextoWhatsapp(data));
+    setClienteNovo(false);
     setError(null);
     setLoading(false);
   }, [id]);
@@ -111,10 +100,21 @@ export function AtaDetalhe() {
     setMensagem(null);
     setError(null);
 
+    const { data: cliente, error: clienteError } = await supabase.rpc('obter_ou_criar_cliente', {
+      p_nome: ata.cliente,
+    });
+
+    if (clienteError || !cliente) {
+      setError(clienteError?.message ?? 'Erro ao vincular o cliente.');
+      setSalvando(false);
+      return;
+    }
+
     const { data, error: updateError } = await supabase
       .from('atas_reuniao')
       .update({
-        cliente: ata.cliente,
+        cliente: cliente.nome,
+        cliente_id: cliente.id,
         assunto: ata.assunto,
         data_reuniao: ata.data_reuniao,
         hora_inicio: ata.hora_inicio,
@@ -144,6 +144,7 @@ export function AtaDetalhe() {
     }
 
     setAta(data);
+    setClienteNovo(false);
     setSalvando(false);
 
     setEnviandoMapeador(true);
@@ -199,14 +200,26 @@ export function AtaDetalhe() {
 
   return (
     <div className="page">
+      <nav className="breadcrumb" aria-label="Navegação">
+        <Link to="/">Clientes</Link>
+        <span aria-hidden="true">/</span>
+        {ata.cliente_id ? (
+          <Link to={`/clientes/${ata.cliente_id}`}>{ata.cliente}</Link>
+        ) : (
+          <span>{ata.cliente || 'Sem cliente'}</span>
+        )}
+        <span aria-hidden="true">/</span>
+        <span>{ata.assunto}</span>
+      </nav>
+
       <div className="page-header">
         <div>
           <h1>{ata.assunto}</h1>
           <p className="field-hint">
-            {ata.cliente} <AtaStatusBadge status={ata.status} />
+            {ata.cliente} · Status da ata: <AtaStatusBadge status={ata.status} />
           </p>
         </div>
-        <button type="button" className="btn btn-ghost" onClick={() => navigate('/')}>
+        <button type="button" className="btn btn-ghost" onClick={() => navigate(-1)}>
           Voltar
         </button>
       </div>
@@ -230,10 +243,14 @@ export function AtaDetalhe() {
           <div className="card form-card">
             <h2>Dados da reunião</h2>
             <div className="form-grid">
-              <label className="field">
-                <span>Cliente / Projeto</span>
-                <input value={ata.cliente} onChange={(e) => atualizarCampo('cliente', e.target.value)} />
-              </label>
+              <ClienteSelect
+                label="Cliente / Projeto"
+                value={ata.cliente}
+                onChange={(nome, { novo }) => {
+                  atualizarCampo('cliente', nome);
+                  setClienteNovo(novo);
+                }}
+              />
               <label className="field">
                 <span>Assunto</span>
                 <input value={ata.assunto} onChange={(e) => atualizarCampo('assunto', e.target.value)} />
@@ -492,6 +509,9 @@ export function AtaDetalhe() {
 
           <div className="card form-card">
             <h2>Salvar</h2>
+            {clienteNovo && (
+              <p className="form-info">O cliente “{ata.cliente}” ainda não existe — será cadastrado ao salvar.</p>
+            )}
             <div className="page-header-actions">
               <button type="button" className="btn btn-primary" onClick={salvar} disabled={salvando || enviandoMapeador}>
                 {salvando ? 'Salvando…' : enviandoMapeador ? 'Enviando pro Mapeador…' : 'Salvar revisão'}

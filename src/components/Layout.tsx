@@ -52,6 +52,12 @@ export function Layout() {
             Ata IA
           </NavLink>
           <nav className="topbar-nav">
+            <NavLink to="/" end className={navLinkClass}>
+              Clientes
+            </NavLink>
+            <NavLink to="/atas" className={navLinkClass}>
+              Todas as atas
+            </NavLink>
             <NavLink to="/reunioes-detectadas" className={navLinkClass}>
               Reuniões detectadas
             </NavLink>

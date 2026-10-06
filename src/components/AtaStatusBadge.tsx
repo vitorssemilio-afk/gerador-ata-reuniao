@@ -1,6 +1,6 @@
 import type { AtaStatus } from '../types/database';
 
-const LABELS: Record<AtaStatus, string> = {
+export const STATUS_LABELS: Record<AtaStatus, string> = {
   rascunho: 'Rascunho',
   processando_ia: 'Gerando com IA',
   revisao: 'Aguardando revisão',
@@ -17,5 +17,5 @@ const TONS: Record<AtaStatus, string> = {
 };
 
 export function AtaStatusBadge({ status }: { status: AtaStatus }) {
-  return <span className={`status-badge ${TONS[status]}`}>{LABELS[status]}</span>;
+  return <span className={`status-badge ${TONS[status]}`}>{STATUS_LABELS[status]}</span>;
 }
