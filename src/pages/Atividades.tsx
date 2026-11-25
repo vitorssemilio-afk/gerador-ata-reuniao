@@ -33,10 +33,12 @@ export function Atividades() {
 
   async function carregar() {
     setLoading(true);
+    const hoje = new Date().toISOString().slice(0, 10);
     const { data, error: fetchError } = await supabase
       .from('atas_reuniao')
       .select('id,cliente,cliente_id,assunto,data_reuniao,status,acoes')
       .in('status', ['revisao', 'concluida'])
+      .gte('data_reuniao', hoje)
       .order('data_reuniao', { ascending: false });
 
     if (fetchError) setError(fetchError.message);
@@ -106,7 +108,7 @@ export function Atividades() {
         <div>
           <h1>Atividades</h1>
           <p className="field-hint">
-            O que precisa ser feito, extraído das ações definidas nas reuniões realizadas.{' '}
+            O que precisa ser feito, extraído das ações definidas em reuniões de hoje em diante.{' '}
             {pendentesCount > 0 && `${pendentesCount} ${pendentesCount === 1 ? 'pendente' : 'pendentes'}.`}
           </p>
         </div>

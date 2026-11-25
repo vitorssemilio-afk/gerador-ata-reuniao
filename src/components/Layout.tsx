@@ -20,6 +20,7 @@ function ContadorAtividadesPendentes() {
       .from('atas_reuniao')
       .select('id,cliente,cliente_id,assunto,data_reuniao,status,acoes')
       .in('status', ['revisao', 'concluida'])
+      .gte('data_reuniao', new Date().toISOString().slice(0, 10))
       .then(({ data }) => {
         if (cancelado) return;
         const total = extrairAtividades(data ?? []).filter((a) => !a.concluida).length;
