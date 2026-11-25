@@ -1,10 +1,38 @@
+import { useEffect, useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useTheme } from '../contexts/ThemeContext';
+import { extrairAtividades } from '../lib/atividades';
+import { supabase } from '../lib/supabaseClient';
 import { AlertaConexaoExpirada } from './AlertaConexaoExpirada';
 
 function navLinkClass({ isActive }: { isActive: boolean }): string {
   return `topbar-nav-link${isActive ? ' active' : ''}`;
+}
+
+function ContadorAtividadesPendentes() {
+  const [pendentes, setPendentes] = useState(0);
+
+  useEffect(() => {
+    let cancelado = false;
+
+    supabase
+      .from('atas_reuniao')
+      .select('id,cliente,cliente_id,assunto,data_reuniao,status,acoes')
+      .in('status', ['revisao', 'concluida'])
+      .then(({ data }) => {
+        if (cancelado) return;
+        const total = extrairAtividades(data ?? []).filter((a) => !a.concluida).length;
+        setPendentes(total);
+      });
+
+    return () => {
+      cancelado = true;
+    };
+  }, []);
+
+  if (pendentes === 0) return null;
+  return <span className="topbar-nav-badge">{pendentes}</span>;
 }
 
 function ThemeToggle() {
@@ -57,6 +85,9 @@ export function Layout() {
             </NavLink>
             <NavLink to="/atas" className={navLinkClass}>
               Todas as atas
+            </NavLink>
+            <NavLink to="/atividades" className={navLinkClass}>
+              Atividades <ContadorAtividadesPendentes />
             </NavLink>
             <NavLink to="/reunioes-detectadas" className={navLinkClass}>
               Reuniões detectadas

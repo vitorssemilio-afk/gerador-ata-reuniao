@@ -9,6 +9,9 @@ export type AtaAcao = {
   descricao: string;
   responsavel: string | null;
   prazo: string | null;
+  // Ausente em ações geradas antes dessa coluna existir — tratar como
+  // pendente (`Boolean(acao.concluida)`) em vez de assumir presente.
+  concluida?: boolean;
 };
 
 export type EnviadoMapeadorStatus = 'enviado' | 'vinculado' | 'requer_revisao' | 'falhou';

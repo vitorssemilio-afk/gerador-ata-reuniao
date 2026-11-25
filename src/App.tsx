@@ -5,6 +5,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AtaDetalhe } from './pages/AtaDetalhe';
 import { Atas } from './pages/Atas';
+import { Atividades } from './pages/Atividades';
 import { ClienteDetalhe } from './pages/ClienteDetalhe';
 import { Clientes } from './pages/Clientes';
 import { ConectarGoogleCallback } from './pages/ConectarGoogleCallback';
@@ -29,6 +30,7 @@ function App() {
             >
               <Route path="/" element={<Clientes />} />
               <Route path="/atas" element={<Atas />} />
+              <Route path="/atividades" element={<Atividades />} />
               <Route path="/clientes/:id" element={<ClienteDetalhe />} />
               <Route path="/nova" element={<NovaAta />} />
               <Route path="/integracoes" element={<Integracoes />} />

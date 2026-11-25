@@ -960,6 +960,104 @@ a:hover {
   margin-top: 4px;
 }
 
+/* ── Nav badge (contador de atividades pendentes) ── */
+.topbar-nav-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  margin-left: 4px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+/* ── Atividades ── */
+.atividades-toolbar {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.atividades-toolbar .field-full {
+  flex: 1;
+  min-width: 220px;
+}
+
+.atividades-toolbar .field:not(.field-full) {
+  min-width: 180px;
+}
+
+.atividades-lista {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.atividade-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 18px;
+}
+
+.atividade-checkbox {
+  padding-top: 2px;
+}
+
+.atividade-checkbox input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.atividade-conteudo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.atividade-descricao {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.atividade-meta a {
+  color: var(--color-text-muted);
+  text-decoration: underline;
+}
+
+.atividade-meta a:hover {
+  color: var(--color-accent);
+}
+
+.atividade-concluida .atividade-descricao {
+  color: var(--color-text-muted);
+  text-decoration: line-through;
+}
+
+.acao-concluida-field {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px !important;
+}
+
+.acao-concluida-field input {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
 @media (max-width: 760px) {
   .atas-tabela-desktop {
     display: none;
@@ -973,12 +1071,14 @@ a:hover {
     flex-wrap: wrap;
   }
 
-  .clientes-toolbar {
+  .clientes-toolbar,
+  .atividades-toolbar {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .clientes-toolbar .field:not(.field-full) {
+  .clientes-toolbar .field:not(.field-full),
+  .atividades-toolbar .field:not(.field-full) {
     min-width: 0;
   }
 

@@ -407,6 +407,9 @@ export function AtaDetalhe() {
 
           <div className="card form-card">
             <h2>Ações</h2>
+            <p className="field-hint">
+              Viram itens em <Link to="/atividades">Atividades</Link> — marque como concluída aqui ou por lá.
+            </p>
             {ata.acoes.map((acao, i) => (
               <div key={i} className="form-grid">
                 <label className="field field-full">
@@ -425,6 +428,14 @@ export function AtaDetalhe() {
                   <span>Prazo</span>
                   <input value={acao.prazo ?? ''} onChange={(e) => atualizarAcao(i, 'prazo', e.target.value)} />
                 </label>
+                <label className="field acao-concluida-field">
+                  <span>Concluída</span>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(acao.concluida)}
+                    onChange={(e) => atualizarCampo('acoes', atualizarItem(ata.acoes, i, { ...acao, concluida: e.target.checked }))}
+                  />
+                </label>
                 <button
                   type="button"
                   className="link-button"
@@ -438,7 +449,7 @@ export function AtaDetalhe() {
               type="button"
               className="btn btn-secondary btn-auto"
               onClick={() =>
-                atualizarCampo('acoes', [...ata.acoes, { descricao: '', responsavel: null, prazo: null }])
+                atualizarCampo('acoes', [...ata.acoes, { descricao: '', responsavel: null, prazo: null, concluida: false }])
               }
             >
               + Adicionar ação
